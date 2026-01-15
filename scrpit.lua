@@ -1,20 +1,10 @@
-local library = loadstring(game:HttpGet(('https://raw.githubusercontent.com/jensonhirst/Orion/main/source')))()
+local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/jensonhirst/Orion/main/source"))()
 local Window = library:MakeWindow({
-    Name = "Sx-het", 
-    HidePremium = false, 
-    SaveConfig = true, 
-    ConfigFolder = "SxhetConfig",
-    IntroEnabled = true,
-    IntroText = "Sx-het Cheat Menu"
+    Name = "Sx-het",
+    HidePremium = false,
+    SaveConfig = false
 })
 
-local player = game:GetService("Players").LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
-local uis = game:GetService("UserInputService")
-local rs = game:GetService("RunService")
-
-local flyActive = false
 local flyBodyVelocity
 local function toggleFly(state)
     if state then
@@ -219,70 +209,4 @@ game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function(newChar)
     humanoid = character:WaitForChild("Humanoid")
 end)
 
-print("Sx-het Loaded")  Callback = function(Value)
-        toggleFPS(Value)
-    end
-})
-
-SettingsTab:AddToggle({
-    Name = "Reduce Lag",
-    Default = false,
-    Callback = function(Value)
-        toggleLagReducer(Value)
-    end
-})
-
--- Credits Tab
-local CreditsTab = Window:MakeTab({
-    Name = "🔗 Channels",
-    Icon = "rbxassetid://3926305904",
-    PremiumOnly = false
-})
-
-CreditsTab:AddSection("📢 Official Channels")
-CreditsTab:AddButton({
-    Name = "Telegram: t.me/sxheat",
-    Callback = function()
-        setclipboard("t.me/sxheat")
-    end
-})
-
-CreditsTab:AddButton({
-    Name = "Discord: discord.gg/sxheat",
-    Callback = function()
-        setclipboard("discord.gg/sxheat")
-    end
-})
-
-CreditsTab:AddParagraph("Disclaimer", "Use at your own risk. Cheating may result in account bans.")
-
--- Window close confirmation
-Window:MakeTab({
-    Name = "Close",
-    Icon = "rbxassetid://3926305904",
-    PremiumOnly = false
-}):AddButton({
-    Name = "Close Sx-het",
-    Callback = function()
-        local result = library:MakePrompt({
-            Name = "Are you sure?",
-            Text = "Do you want to close Sx-het cheat menu?",
-            Buttons = {"Yes", "Cancel"}
-        })
-        
-        if result == "Yes" then
-            library:Destroy()
-        end
-    end
-})
-
--- Auto-update character reference
-game:GetService("Players").LocalPlayer.CharacterAdded:Connect(function(newChar)
-    character = newChar
-    humanoid = character:WaitForChild("Humanoid")
-end)
-
-print("✅ Sx-het Loaded Successfully!")
-print("📊 Dashboard Features Ready")
-print("🎣 Fishing Cheats Activated")
-print("🛡️ Protection Systems Online")
+print("Sx-het Loaded")
