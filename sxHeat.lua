@@ -139,7 +139,7 @@ local VisualTab = Window:MakeTab({Name = "Visuals", Icon = "rbxassetid://4483345
 VisualTab:AddSection({Name = "Fake Identity"})
 VisualTab:AddDropdown({
     Name = "Choose Rank", Default = "Admin", Options = {"Admin", "Creator", "Developer", "Development"},
-    Callback = function(v) states.fakeRank.type = v end    
+    Callback = function(v) states.fakeRank.type = v end
 })
 VisualTab:AddToggle({Name = "Enable Fake Rank", Default = false, Callback = function(v) states.fakeRank.enabled = v end})
 VisualTab:AddTextbox({Name = "Fake Level Value", Default = "999", TextDisappear = false, Callback = function(v) states.fakeLevel.val = v end})
@@ -196,6 +196,7 @@ AboutTab:AddButton({
 
 local function CreateFloatingLogo()
     local sg = Instance.new("ScreenGui", game.CoreGui)
+    sg.Name = "SxHeatMinimize"
     local img = Instance.new("ImageButton", sg)
     img.Size = UDim2.new(0, 55, 0, 55)
     img.Position = UDim2.new(0, 100, 0, 100)
