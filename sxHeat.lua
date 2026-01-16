@@ -184,8 +184,8 @@ MovementTab:AddToggle({
 
 local AboutTab = Window:MakeTab({Name = "About", Icon = "rbxassetid://4483345998"})
 AboutTab:AddSection({Name = "Script Information"})
-AboutTab:AddParagraph("Version","1.0.0 Ultimate Premium")
-AboutTab:AddParagraph("Developer","SkyyXploit")
+AboutTab:AddParagraph("Version","1.0 premium")
+AboutTab:AddParagraph("Developer","Dimzxzzx07")
 AboutTab:AddButton({
     Name = "Telegram Channel",
     Callback = function()
