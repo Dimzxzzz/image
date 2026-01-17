@@ -1,7 +1,7 @@
 local library = loadstring(game:HttpGet("https://raw.githubusercontent.com/jensonhirst/Orion/main/source"))()
 
 local Window = library:MakeWindow({
-    Name = "Sx-Forces | Ultimate Premium",
+    Name = "Sx-Forces | Premium",
     HidePremium = false,
     SaveConfig = true,
     ConfigFolder = "SxForcesConfig",
