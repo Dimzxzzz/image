@@ -7,7 +7,7 @@ local Window = library:MakeWindow({
     ConfigFolder = "SxForcesConfig",
     IntroEnabled = true,
     IntroText = "Welcome, To Sx-Forces Ultimate",
-    Icon = "https://raw.githubusercontent.com/Dimzxzzz/image/refs/heads/main/IMG_20251025_050958_125.jpg"
+    Icon = "rbxassetid://6031068433"
 })
 
 library.Theme = {
@@ -36,7 +36,8 @@ local states = {
     selectedTarget = "",
     autoLag = false,
     autoKillAll = false,
-    godMode = false
+    godMode = false,
+    tampolEnabled = false
 }
 
 local function getPlayerList()
@@ -46,6 +47,38 @@ local function getPlayerList()
     end
     return list
 end
+
+local function bypassKill(targetPlayer)
+    if targetPlayer and targetPlayer.Character then
+        local targetChar = targetPlayer.Character
+        local hum = targetChar:FindFirstChildOfClass("Humanoid")
+        if hum then
+            for i = 1, 10 do
+                task.spawn(function()
+                    if targetChar:FindFirstChild("Head") then targetChar.Head:Destroy() end
+                    targetChar:BreakJoints()
+                    hum.Health = 0
+                end)
+            end
+        end
+    end
+end
+
+local function bypassKick(targetPlayer)
+    if targetPlayer then
+        for i = 1, 5 do
+            task.spawn(function()
+                targetPlayer:Kick("Banned by Sx-Forces")
+            end)
+        end
+    end
+end
+
+local MainTab = Window:MakeTab({Name = "Information", Icon = "rbxassetid://4483345998"})
+
+MainTab:AddParagraph("Executor", "Delta / PC / Mobile")
+MainTab:AddParagraph("Game", "Fish It! [UPD]")
+MainTab:AddParagraph("Version", "1.0")
 
 local AdminTab = Window:MakeTab({Name = "Admin List", Icon = "rbxassetid://4483362458"})
 
@@ -59,20 +92,18 @@ local TargetDropdown = AdminTab:AddDropdown({
 AdminTab:AddButton({Name = "Refresh List", Callback = function() TargetDropdown:Refresh(getPlayerList(), true) end})
 
 AdminTab:AddButton({
-    Name = "Kill Selected",
+    Name = "Kill Selected (Bypass)",
     Callback = function()
         local target = game.Players:FindFirstChild(states.selectedTarget)
-        if target and target.Character then
-            target.Character:BreakJoints()
-        end
+        bypassKill(target)
     end
 })
 
 AdminTab:AddButton({
-    Name = "Ban & Kick Selected",
+    Name = "Ban & Kick Selected (Bypass)",
     Callback = function()
         local target = game.Players:FindFirstChild(states.selectedTarget)
-        if target then target:Kick("Banned by Sx-Forces t.me/sxforces") end
+        bypassKick(target)
     end
 })
 
@@ -87,7 +118,7 @@ AdminTab:AddButton({
 })
 
 AdminTab:AddToggle({
-    Name = "Auto Kill All (Massive)",
+    Name = "Auto Kill All (Massive Bypass)",
     Default = false,
     Callback = function(v) states.autoKillAll = v end
 })
@@ -96,7 +127,7 @@ local MoveTab = Window:MakeTab({Name = "Movement", Icon = "rbxassetid://44833624
 
 MoveTab:AddSlider({Name = "Fly Speed", Min = 10, Max = 500, Default = 50, Callback = function(v) states.fly.val = v end})
 MoveTab:AddToggle({
-    Name = "Enable Fly",
+    Name = "Enable Fly (Look-Based)",
     Default = false,
     Callback = function(v) 
         states.fly.enabled = v
@@ -110,7 +141,12 @@ MoveTab:AddToggle({
             task.spawn(function()
                 while states.fly.enabled do
                     bg.CFrame = cam.CFrame
-                    bv.Velocity = (char.Humanoid.MoveDirection.Magnitude > 0) and (cam.CFrame:VectorToWorldSpace(char.Humanoid.MoveDirection).Unit * states.fly.val) or Vector3.new(0,0,0)
+                    local direction = Vector3.new(0,0,0)
+                    if uis:IsKeyDown(Enum.KeyCode.W) then direction = direction + cam.CFrame.LookVector end
+                    if uis:IsKeyDown(Enum.KeyCode.S) then direction = direction - cam.CFrame.LookVector end
+                    if uis:IsKeyDown(Enum.KeyCode.A) then direction = direction - cam.CFrame.RightVector end
+                    if uis:IsKeyDown(Enum.KeyCode.D) then direction = direction + cam.CFrame.RightVector end
+                    bv.Velocity = direction * states.fly.val
                     task.wait()
                 end
                 bg:Destroy(); bv:Destroy()
@@ -155,14 +191,57 @@ ProtectTab:AddToggle({
         end
     end
 })
+
+ProtectTab:AddToggle({
+    Name = "Get Tampol Item",
+    Default = false,
+    Callback = function(v)
+        states.tampolEnabled = v
+        if v then
+            local tool = Instance.new("Tool")
+            tool.Name = "Tangan Tampol"
+            tool.RequiresHandle = false
+            tool.Parent = player.Backpack
+            tool.Activated:Connect(function()
+                local char = player.Character
+                local hitPart = player:GetMouse().Target
+                if hitPart and hitPart.Parent:FindFirstChild("Humanoid") then
+                    local targetChar = hitPart.Parent
+                    local force = Instance.new("BodyVelocity", targetChar.HumanoidRootPart)
+                    force.Velocity = char.HumanoidRootPart.CFrame.LookVector * 500 + Vector3.new(0, 500, 0)
+                    force.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    task.wait(0.1)
+                    force:Destroy()
+                    targetChar.Humanoid.Health = 0
+                    targetChar:BreakJoints()
+                end
+            end)
+        end
+    end
+})
+
 ProtectTab:AddToggle({Name = "Anti-Admin Detector", Default = false, Callback = function(v) states.antiAdmin = v end})
 ProtectTab:AddToggle({Name = "Anti-AFK", Default = false, Callback = function(v) states.antiAFK = v end})
 ProtectTab:AddSlider({Name = "FPS Limit", Min = 30, Max = 240, Default = 60, Callback = function(v) setfpscap(v) end})
 ProtectTab:AddToggle({Name = "Server Auto Lag", Default = false, Callback = function(v) states.autoLag = v end})
 
-local InfoTab = Window:MakeTab({Name = "Community", Icon = "rbxassetid://4483345998"})
-InfoTab:AddButton({Name = "Copy Telegram", Callback = function() setclipboard("https://t.me/sxforces") end})
-InfoTab:AddButton({Name = "Copy Discord", Callback = function() setclipboard("https://discord.gg/sxforces") end})
+local CommunityTab = Window:MakeTab({Name = "Channel", Icon = "rbxassetid://4483345998"})
+
+CommunityTab:AddParagraph("Developer", "@Dimzxzzx07")
+CommunityTab:AddLabel("Script: sx-forces")
+CommunityTab:AddLabel("Version: 1.0")
+
+CommunityTab:AddButton({
+    Name = "Telegram",
+    Callback = function() setclipboard("https://t.me/sxforces") end
+})
+
+CommunityTab:AddButton({
+    Name = "Discord",
+    Callback = function() setclipboard("https://discord.gg/sxforces") end
+})
+
+CommunityTab:AddLabel("Copyright 2026")
 
 rs.Heartbeat:Connect(function()
     if player.Character and player.Character:FindFirstChild("Humanoid") then
@@ -181,7 +260,7 @@ rs.Heartbeat:Connect(function()
         if states.jump.enabled then hum.JumpPower = states.jump.val; hum.UseJumpPower = true end
         if states.autoKillAll then
             for _, p in pairs(game.Players:GetPlayers()) do
-                if p ~= player and p.Character then p.Character:BreakJoints() end
+                if p ~= player then bypassKill(p) end
             end
         end
         if states.autoLag then
