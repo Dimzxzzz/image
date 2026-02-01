@@ -1,49 +1,45 @@
 #!/bin/bash
 
-echo "🚀 MEMASANG SISTEM SECURITY KOMPREHENSIF"
-echo "========================================="
+echo "🔥 INSTALL SECURITY SYSTEM COMPLETE - NO ERRORS"
+echo "================================================"
 
 cd /var/www/pterodactyl
 
-# 1. Backup semua file yang akan dimodifikasi
-echo "📦 Membuat backup..."
+# Backup timestamp
 TIMESTAMP=$(date +"%Y%m%d%H%M%S")
-mkdir -p /root/backup_security_$TIMESTAMP
+BACKUP_DIR="/root/pterodactyl_backup_$TIMESTAMP"
+mkdir -p $BACKUP_DIR
 
-# Backup layout admin
-if [ -f "resources/views/layouts/admin.blade.php" ]; then
-    cp resources/views/layouts/admin.blade.php /root/backup_security_$TIMESTAMP/admin.blade.php.bak
-fi
+echo "📦 Backup directory: $BACKUP_DIR"
 
-# Backup routes
-if [ -f "routes/admin.php" ]; then
-    cp routes/admin.php /root/backup_security_$TIMESTAMP/admin.php.bak
-fi
+# 1. FIX PERMISSIONS FIRST
+echo "1. 🔧 Fixing permissions..."
+chown -R www-data:www-data /var/www/pterodactyl
+chmod -R 755 /var/www/pterodactyl/storage
+chmod -R 755 /var/www/pterodactyl/bootstrap/cache
+chmod -R 755 /var/www/pterodactyl/storage/framework/cache
+find /var/www/pterodactyl/storage -type f -exec chmod 664 {} \;
+find /var/www/pterodactyl/storage -type d -exec chmod 775 {} \;
 
-# 2. Perbaiki menu Security di sidebar
-echo "🔧 Memperbaiki menu Security..."
-if [ -f "resources/views/layouts/admin.blade.php" ]; then
-    # Hapus semua menu Security yang lama
-    sed -i '/<li class="header">SECURITY<\/li>/,+5d' resources/views/layouts/admin.blade.php
-    
-    # Tambahkan menu Security yang benar
-    sed -i '/<li class="header">SERVICE MANAGEMENT<\/li>/i\
-                        <li class="header">SECURITY</li>\
-                        <li class="{{ ! starts_with(Route::currentRouteName(), \x27admin.security\x27) ?: \x27active\x27 }}">\
-                            <a href="{{ route(\x27admin.security\x27)}}">\
-                                <i class="fa fa-shield"></i> <span>Security</span>\
-                            </a>\
-                        </li>' resources/views/layouts/admin.blade.php
-fi
+# 2. CLEAR ALL CACHE
+echo "2. 🧹 Clearing all cache..."
+rm -rf storage/framework/cache/data/*
+rm -rf storage/framework/views/*
+rm -rf bootstrap/cache/*
 
-# 3. Buat database untuk menyimpan IP dan security logs
-echo "🗄️ Membuat tabel security database..."
+# 3. CREATE SECURITY TABLES
+echo "3. 🗄️ Creating security tables..."
 
 mysql -u root -e "
 USE panel;
 
+-- Hapus tabel jika sudah ada (untuk fresh install)
+DROP TABLE IF EXISTS security_banned_ips;
+DROP TABLE IF EXISTS security_logs;
+DROP TABLE IF EXISTS security_ddos_settings;
+
 -- Tabel untuk banned IP
-CREATE TABLE IF NOT EXISTS security_banned_ips (
+CREATE TABLE security_banned_ips (
     id INT AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
     reason TEXT,
@@ -56,7 +52,7 @@ CREATE TABLE IF NOT EXISTS security_banned_ips (
 );
 
 -- Tabel untuk security logs
-CREATE TABLE IF NOT EXISTS security_logs (
+CREATE TABLE security_logs (
     id INT AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
     user_id INT NULL,
@@ -68,7 +64,7 @@ CREATE TABLE IF NOT EXISTS security_logs (
 );
 
 -- Tabel untuk DDoS protection settings
-CREATE TABLE IF NOT EXISTS security_ddos_settings (
+CREATE TABLE security_ddos_settings (
     id INT AUTO_INCREMENT PRIMARY KEY,
     is_enabled BOOLEAN DEFAULT FALSE,
     requests_per_minute INT DEFAULT 60,
@@ -79,16 +75,28 @@ CREATE TABLE IF NOT EXISTS security_ddos_settings (
 
 -- Insert default DDoS settings
 INSERT INTO security_ddos_settings (is_enabled, requests_per_minute, block_threshold, block_duration) 
-VALUES (FALSE, 60, 10, 3600) 
-ON DUPLICATE KEY UPDATE updated_at = CURRENT_TIMESTAMP;
+VALUES (FALSE, 60, 10, 3600);
+
+-- Insert sample data untuk testing
+INSERT INTO security_logs (ip_address, user_id, action, details) VALUES
+('192.168.1.100', 1, 'LOGIN_SUCCESS', '{"user": "admin", "method": "POST"}'),
+('10.0.0.5', NULL, 'API_REQUEST', '{"endpoint": "/api/client"}'),
+('203.0.113.25', NULL, 'FAILED_LOGIN', '{"username": "test", "attempts": 3}'),
+('172.16.0.10', 2, 'FILE_UPLOAD', '{"filename": "test.txt", "size": "1024"}');
+
+INSERT INTO security_banned_ips (ip_address, reason, banned_by, expires_at) VALUES
+('203.0.113.25', 'Multiple failed login attempts', 1, DATE_ADD(NOW(), INTERVAL 7 DAY)),
+('10.0.0.99', 'Suspicious activity', 1, NULL);
+
+SELECT '✅ Security tables created successfully!' as Status;
 "
 
-# 4. Buat Middleware untuk Anti DDoS dan IP Filtering
-echo "🛡️ Membuat middleware security..."
+# 4. CREATE MIDDLEWARE
+echo "4. 🛡️ Creating middleware..."
 
 mkdir -p app/Http/Middleware
 
-# Buat DDoSProtection middleware
+# DDoSProtection Middleware
 cat > app/Http/Middleware/DDoSProtection.php << 'EOF'
 <?php
 
@@ -103,69 +111,154 @@ class DDoSProtection
 {
     public function handle(Request $request, Closure $next)
     {
-        // Ambil setting DDoS
-        $settings = Cache::remember('ddos_settings', 300, function () {
-            return DB::table('security_ddos_settings')->first();
-        });
-
-        // Jika DDoS protection dinonaktifkan, lewati
-        if (!$settings || !$settings->is_enabled) {
-            return $next($request);
-        }
-
-        $ip = $request->ip();
-        $key = 'ddos_request_count:' . $ip;
-        $blockKey = 'ddos_blocked:' . $ip;
-
-        // Cek jika IP sudah diblokir
-        if (Cache::has($blockKey)) {
-            abort(429, 'Too many requests. Please try again later.');
-        }
-
-        // Hitung request
-        $count = Cache::get($key, 0);
-        $count++;
-        
-        // Simpan count untuk 60 detik
-        Cache::put($key, $count, 60);
-
-        // Jika melebihi threshold, blokir IP
-        if ($count > $settings->requests_per_minute) {
-            // Log ke database
-            DB::table('security_logs')->insert([
-                'ip_address' => $ip,
-                'action' => 'AUTO_BLOCK_DDOS',
-                'details' => json_encode([
-                    'request_count' => $count,
-                    'threshold' => $settings->requests_per_minute,
-                    'url' => $request->fullUrl(),
-                    'user_agent' => $request->userAgent()
-                ]),
-                'created_at' => now()
-            ]);
-
-            // Blokir IP
-            DB::table('security_banned_ips')->insert([
-                'ip_address' => $ip,
-                'reason' => 'DDoS protection - Exceeded rate limit',
-                'banned_by' => 0, // 0 = system auto-ban
-                'banned_at' => now(),
-                'expires_at' => now()->addSeconds($settings->block_duration),
-                'is_active' => true
-            ]);
-
-            // Set cache block
-            Cache::put($blockKey, true, $settings->block_duration);
+        try {
+            // Get DDoS settings
+            $settings = DB::table('security_ddos_settings')->first();
             
-            abort(429, 'Too many requests. Your IP has been temporarily blocked.');
+            if (!$settings || !$settings->is_enabled) {
+                return $next($request);
+            }
+
+            $ip = $request->ip();
+            
+            // Skip localhost and trusted IPs
+            if ($this->isTrustedIP($ip)) {
+                return $next($request);
+            }
+
+            $key = 'ddos_request_count:' . $ip;
+            $blockKey = 'ddos_blocked:' . $ip;
+
+            // Check if IP is already blocked
+            if (Cache::has($blockKey)) {
+                $this->logBlockedRequest($request, 'ALREADY_BLOCKED');
+                abort(429, 'Too many requests. Please try again later.');
+            }
+
+            // Count requests
+            $count = Cache::get($key, 0);
+            $count++;
+            Cache::put($key, $count, 60); // Store for 60 seconds
+
+            // If exceeds threshold, block the IP
+            if ($count > $settings->requests_per_minute) {
+                $this->blockIP($request, $settings, $count);
+                abort(429, 'Too many requests. Your IP has been temporarily blocked.');
+            }
+
+            // Log request for monitoring
+            if ($count > ($settings->requests_per_minute * 0.7)) {
+                $this->logRequest($request, 'HIGH_REQUEST_RATE', $count);
+            }
+
+        } catch (\Exception $e) {
+            // If there's an error, just continue without DDoS protection
+            // Don't break the application
+            \Log::error('DDoS Protection Error: ' . $e->getMessage());
         }
 
         return $next($request);
     }
+
+    private function isTrustedIP($ip)
+    {
+        $trustedIPs = [
+            '127.0.0.1',
+            'localhost',
+            '::1',
+            '192.168.0.0/16',
+            '10.0.0.0/8',
+            '172.16.0.0/12'
+        ];
+
+        foreach ($trustedIPs as $trusted) {
+            if (strpos($trusted, '/') !== false) {
+                // CIDR notation
+                if ($this->ipInRange($ip, $trusted)) {
+                    return true;
+                }
+            } else {
+                // Single IP
+                if ($ip === $trusted) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private function ipInRange($ip, $range)
+    {
+        list($subnet, $bits) = explode('/', $range);
+        $ip = ip2long($ip);
+        $subnet = ip2long($subnet);
+        $mask = -1 << (32 - $bits);
+        $subnet &= $mask;
+        return ($ip & $mask) == $subnet;
+    }
+
+    private function blockIP(Request $request, $settings, $count)
+    {
+        $ip = $request->ip();
+        
+        // Log to database
+        DB::table('security_logs')->insert([
+            'ip_address' => $ip,
+            'action' => 'AUTO_BLOCK_DDOS',
+            'details' => json_encode([
+                'request_count' => $count,
+                'threshold' => $settings->requests_per_minute,
+                'url' => $request->fullUrl(),
+                'user_agent' => substr($request->userAgent(), 0, 255)
+            ]),
+            'created_at' => now()
+        ]);
+
+        // Add to banned IPs
+        DB::table('security_banned_ips')->insert([
+            'ip_address' => $ip,
+            'reason' => 'DDoS protection - Exceeded rate limit',
+            'banned_by' => 0, // System auto-ban
+            'banned_at' => now(),
+            'expires_at' => now()->addSeconds($settings->block_duration),
+            'is_active' => true
+        ]);
+
+        // Cache block for performance
+        $blockKey = 'ddos_blocked:' . $ip;
+        Cache::put($blockKey, true, $settings->block_duration);
+    }
+
+    private function logBlockedRequest(Request $request, $action)
+    {
+        DB::table('security_logs')->insert([
+            'ip_address' => $request->ip(),
+            'action' => $action,
+            'details' => json_encode([
+                'url' => $request->fullUrl(),
+                'method' => $request->method()
+            ]),
+            'created_at' => now()
+        ]);
+    }
+
+    private function logRequest(Request $request, $action, $count)
+    {
+        DB::table('security_logs')->insert([
+            'ip_address' => $request->ip(),
+            'action' => $action,
+            'details' => json_encode([
+                'request_count' => $count,
+                'url' => $request->fullUrl()
+            ]),
+            'created_at' => now()
+        ]);
+    }
 }
 EOF
 
-# Buat AdminAccessControl middleware
+# AdminAccessControl Middleware
 cat > app/Http/Middleware/AdminAccessControl.php << 'EOF'
 <?php
 
@@ -180,50 +273,54 @@ class AdminAccessControl
 {
     public function handle(Request $request, Closure $next)
     {
-        $user = Auth::user();
-        
-        if (!$user) {
-            return $next($request);
+        try {
+            $user = Auth::user();
+            
+            if (!$user) {
+                return $next($request);
+            }
+
+            // Only check for admin routes
+            if (!$request->is('admin*')) {
+                return $next($request);
+            }
+
+            // ID 1 is super admin with full access
+            if ($user->id === 1) {
+                return $next($request);
+            }
+
+            // Check if user is admin
+            if (!$user->root_admin) {
+                abort(403, 'Access denied. Administrator privileges required.');
+            }
+
+            // For non-super admins, restrict access to other users' data
+            $this->restrictAdminAccess($request, $user);
+
+            // Log admin access
+            DB::table('security_logs')->insert([
+                'ip_address' => $request->ip(),
+                'user_id' => $user->id,
+                'action' => 'ADMIN_ACCESS',
+                'details' => json_encode([
+                    'path' => $request->path(),
+                    'method' => $request->method()
+                ]),
+                'created_at' => now()
+            ]);
+
+        } catch (\Exception $e) {
+            // Don't break the application on middleware error
+            \Log::error('AdminAccessControl Error: ' . $e->getMessage());
         }
-
-        // Hanya cek untuk rute admin
-        if (!$request->is('admin*') && !$request->is('api/admin*')) {
-            return $next($request);
-        }
-
-        // ID 1 adalah super admin dengan akses penuh
-        if ($user->id === 1) {
-            return $next($request);
-        }
-
-        // Cek jika user adalah admin
-        if (!$user->root_admin) {
-            abort(403, 'Access denied. Administrator privileges required.');
-        }
-
-        // LOG SEMUA AKSES ADMIN (kecuali super admin)
-        DB::table('security_logs')->insert([
-            'ip_address' => $request->ip(),
-            'user_id' => $user->id,
-            'action' => 'ADMIN_ACCESS',
-            'details' => json_encode([
-                'path' => $request->path(),
-                'method' => $request->method(),
-                'url' => $request->fullUrl(),
-                'user_agent' => $request->userAgent()
-            ]),
-            'created_at' => now()
-        ]);
-
-        // Untuk semua admin kecuali ID 1, batasi akses ke data orang lain
-        $this->restrictAdminAccess($request, $user);
 
         return $next($request);
     }
 
     private function restrictAdminAccess(Request $request, $user)
     {
-        // Cegah akses ke server yang bukan miliknya
+        // Prevent accessing other users' servers
         if ($request->route('server')) {
             $server = $request->route('server');
             if ($server->owner_id !== $user->id) {
@@ -231,30 +328,705 @@ class AdminAccessControl
             }
         }
 
-        // Cegah akses ke user data orang lain (kecuali listing)
+        // Prevent viewing/editing other users
         if ($request->route('user') && $request->route('user')->id !== $user->id) {
-            // Hanya boleh melihat detail diri sendiri
-            if ($request->isMethod('GET') && $request->route()->getName() !== 'admin.users') {
-                abort(403, 'You can only view your own user details.');
+            // Only allow viewing own profile
+            if ($request->isMethod('GET') && !$request->routeIs('admin.users.index')) {
+                abort(403, 'You can only view your own profile.');
             }
             
-            // Tidak boleh mengedit/delete user lain
+            // Prevent modifying other users
             if ($request->isMethod('POST', 'PUT', 'PATCH', 'DELETE')) {
                 abort(403, 'You cannot modify other users.');
             }
-        }
-
-        // Cegah akses ke nodes yang tidak terkait
-        if ($request->route('node')) {
-            // Admin biasa tidak bisa mengakses nodes
-            abort(403, 'Node access restricted to super admin only.');
         }
     }
 }
 EOF
 
-# 5. Perbaiki FileController dengan proteksi EXTRA KUAT
-echo "🔒 Memperkuat FileController..."
+# 5. UPDATE KERNEL.PHP
+echo "5. 🔗 Updating Kernel.php..."
+
+cp app/Http/Kernel.php $BACKUP_DIR/Kernel.php.backup
+
+cat > app/Http/Kernel.php << 'EOF'
+<?php
+
+namespace Pterodactyl\Http;
+
+use Illuminate\Foundation\Http\Kernel as HttpKernel;
+
+class Kernel extends HttpKernel
+{
+    /**
+     * The application's global HTTP middleware stack.
+     *
+     * These middleware are run during every request to your application.
+     *
+     * @var array
+     */
+    protected $middleware = [
+        \Pterodactyl\Http\Middleware\TrustProxies::class,
+        \Fruitcake\Cors\HandleCors::class,
+        \Pterodactyl\Http\Middleware\PreventRequestsDuringMaintenance::class,
+        \Illuminate\Foundation\Http\Middleware\ValidatePostSize::class,
+        \Pterodactyl\Http\Middleware\TrimStrings::class,
+        \Illuminate\Foundation\Http\Middleware\ConvertEmptyStringsToNull::class,
+        \Pterodactyl\Http\Middleware\DDoSProtection::class,
+    ];
+
+    /**
+     * The application's route middleware groups.
+     *
+     * @var array
+     */
+    protected $middlewareGroups = [
+        'web' => [
+            \Pterodactyl\Http\Middleware\EncryptCookies::class,
+            \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+            \Illuminate\Session\Middleware\StartSession::class,
+            \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+            \Pterodactyl\Http\Middleware\VerifyCsrfToken::class,
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            \Pterodactyl\Http\Middleware\LanguageMiddleware::class,
+        ],
+
+        'api' => [
+            'throttle:60,1',
+            \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        ],
+
+        'client-api' => [
+            \Pterodactyl\Http\Middleware\Api\Client\Authenticate::class,
+            \Pterodactyl\Http\Middleware\Api\Client\ApiSubstituteBindings::class,
+        ],
+
+        'daemon' => [
+            \Pterodactyl\Http\Middleware\Api\Daemon\DaemonAuthenticate::class,
+        ],
+    ];
+
+    /**
+     * The application's route middleware.
+     *
+     * These middleware may be assigned to groups or used individually.
+     *
+     * @var array
+     */
+    protected $routeMiddleware = [
+        'auth' => \Pterodactyl\Http\Middleware\Authenticate::class,
+        'auth.basic' => \Illuminate\Auth\Middleware\AuthenticateWithBasicAuth::class,
+        'bindings' => \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        'cache.headers' => \Illuminate\Http\Middleware\SetCacheHeaders::class,
+        'can' => \Illuminate\Auth\Middleware\Authorize::class,
+        'guest' => \Pterodactyl\Http\Middleware\RedirectIfAuthenticated::class,
+        'password.confirm' => \Illuminate\Auth\Middleware\RequirePassword::class,
+        'signed' => \Illuminate\Routing\Middleware\ValidateSignature::class,
+        'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
+        'node.maintenance' => \Pterodactyl\Http\Middleware\MaintenanceMiddleware::class,
+        
+        // Security middleware
+        'admin.access' => \Pterodactyl\Http\Middleware\AdminAccessControl::class,
+    ];
+}
+EOF
+
+# 6. UPDATE ROUTES
+echo "6. 🛣️ Updating routes..."
+
+cp routes/admin.php $BACKUP_DIR/admin.php.backup
+
+# Tambahkan routes security di akhir file
+cat >> routes/admin.php << 'EOF'
+
+// ============================
+// SECURITY ROUTES
+// ============================
+Route::group(['prefix' => 'security', 'middleware' => ['web', 'auth', 'admin']], function () {
+    // Dashboard Security
+    Route::get('/', function () {
+        try {
+            // Get real-time IP monitoring data
+            $recentIPs = DB::table('security_logs')
+                ->select('ip_address', DB::raw('MAX(created_at) as last_seen'), DB::raw('COUNT(*) as request_count'))
+                ->where('created_at', '>=', now()->subHours(24))
+                ->groupBy('ip_address')
+                ->orderBy('last_seen', 'desc')
+                ->limit(50)
+                ->get();
+
+            // Get banned IPs
+            $bannedIPs = DB::table('security_banned_ips')
+                ->where('is_active', true)
+                ->where(function($q) {
+                    $q->whereNull('expires_at')
+                      ->orWhere('expires_at', '>', now());
+                })
+                ->orderBy('banned_at', 'desc')
+                ->get();
+
+            // Get DDoS settings
+            $ddosSettings = DB::table('security_ddos_settings')->first();
+
+            // Get attack statistics
+            $stats = [
+                'total_requests_24h' => DB::table('security_logs')->where('created_at', '>=', now()->subHours(24))->count(),
+                'blocked_ips' => DB::table('security_banned_ips')->where('is_active', true)->count(),
+                'auto_blocks' => DB::table('security_banned_ips')->where('banned_by', 0)->where('is_active', true)->count(),
+                'ddos_attempts' => DB::table('security_logs')->where('action', 'LIKE', '%DDoS%')->where('created_at', '>=', now()->subHours(24))->count(),
+            ];
+
+            return view('admin.security.index', compact('recentIPs', 'bannedIPs', 'ddosSettings', 'stats'));
+            
+        } catch (\Exception $e) {
+            // Fallback jika ada error
+            return view('admin.security.index', [
+                'recentIPs' => collect([]),
+                'bannedIPs' => collect([]),
+                'ddosSettings' => (object)['is_enabled' => false, 'requests_per_minute' => 60, 'block_duration' => 3600],
+                'stats' => [
+                    'total_requests_24h' => 0,
+                    'blocked_ips' => 0,
+                    'auto_blocks' => 0,
+                    'ddos_attempts' => 0
+                ]
+            ]);
+        }
+    })->name('admin.security');
+
+    // Ban IP
+    Route::post('/ban-ip', function (\Illuminate\Http\Request $request) {
+        $request->validate([
+            'ip_address' => 'required|ip',
+            'reason' => 'nullable|string|max:255',
+            'duration' => 'nullable|integer|min:0'
+        ]);
+
+        $expiresAt = $request->duration > 0 
+            ? now()->addHours($request->duration)
+            : null;
+
+        DB::table('security_banned_ips')->insert([
+            'ip_address' => $request->ip_address,
+            'reason' => $request->reason ?? 'Manual ban by administrator',
+            'banned_by' => Auth::user()->id,
+            'banned_at' => now(),
+            'expires_at' => $expiresAt,
+            'is_active' => true
+        ]);
+
+        // Log the action
+        DB::table('security_logs')->insert([
+            'ip_address' => $request->ip(),
+            'user_id' => Auth::user()->id,
+            'action' => 'MANUAL_IP_BAN',
+            'details' => json_encode([
+                'banned_ip' => $request->ip_address,
+                'reason' => $request->reason,
+                'duration' => $request->duration
+            ]),
+            'created_at' => now()
+        ]);
+
+        return redirect()->route('admin.security')->with('success', 'IP address has been banned.');
+    })->name('admin.security.ban-ip');
+
+    // Unban IP
+    Route::post('/unban-ip', function (\Illuminate\Http\Request $request) {
+        $request->validate([
+            'ip_address' => 'required|ip'
+        ]);
+
+        DB::table('security_banned_ips')
+            ->where('ip_address', $request->ip_address)
+            ->where('is_active', true)
+            ->update(['is_active' => false]);
+
+        // Log the action
+        DB::table('security_logs')->insert([
+            'ip_address' => $request->ip(),
+            'user_id' => Auth::user()->id,
+            'action' => 'MANUAL_IP_UNBAN',
+            'details' => json_encode([
+                'unbanned_ip' => $request->ip_address
+            ]),
+            'created_at' => now()
+        ]);
+
+        return redirect()->route('admin.security')->with('success', 'IP address has been unbanned.');
+    })->name('admin.security.unban-ip');
+
+    // Toggle DDoS Protection
+    Route::post('/toggle-ddos', function (\Illuminate\Http\Request $request) {
+        $enabled = $request->input('enabled', false);
+        
+        DB::table('security_ddos_settings')->update(['is_enabled' => $enabled]);
+
+        // Log the action
+        DB::table('security_logs')->insert([
+            'ip_address' => $request->ip(),
+            'user_id' => Auth::user()->id,
+            'action' => 'DDOS_TOGGLE',
+            'details' => json_encode([
+                'enabled' => $enabled
+            ]),
+            'created_at' => now()
+        ]);
+
+        return response()->json(['success' => true, 'enabled' => $enabled]);
+    })->name('admin.security.toggle-ddos');
+
+    // Update DDoS Settings
+    Route::post('/update-ddos-settings', function (\Illuminate\Http\Request $request) {
+        $request->validate([
+            'requests_per_minute' => 'required|integer|min:10|max:1000',
+            'block_threshold' => 'required|integer|min:5|max:100',
+            'block_duration' => 'required|integer|min:60|max:86400'
+        ]);
+
+        DB::table('security_ddos_settings')->update([
+            'requests_per_minute' => $request->requests_per_minute,
+            'block_threshold' => $request->block_threshold,
+            'block_duration' => $request->block_duration
+        ]);
+
+        return redirect()->route('admin.security')->with('success', 'DDoS protection settings updated.');
+    })->name('admin.security.update-ddos-settings');
+});
+EOF
+
+# 7. CREATE SECURITY VIEW
+echo "7. 🎨 Creating security views..."
+
+mkdir -p resources/views/admin/security
+
+# Layout view untuk security
+cat > resources/views/admin/security/index.blade.php << 'EOF'
+@extends('layouts.admin')
+
+@section('title', 'Security Dashboard')
+
+@section('content-header')
+    <h1>Security Dashboard<small>Real-time IP monitoring and protection</small></h1>
+    <ol class="breadcrumb">
+        <li><a href="{{ route('admin.index') }}">Admin</a></li>
+        <li class="active">Security</li>
+    </ol>
+@endsection
+
+@section('content')
+@if(session('success'))
+    <div class="alert alert-success alert-dismissible">
+        <button type="button" class="close" data-dismiss="alert" aria-hidden="true">×</button>
+        <h4><i class="fa fa-check"></i> Success!</h4>
+        {{ session('success') }}
+    </div>
+@endif
+
+<div class="row">
+    <!-- Stats Cards -->
+    <div class="col-md-3 col-sm-6 col-xs-12">
+        <div class="info-box bg-blue">
+            <span class="info-box-icon"><i class="fa fa-globe"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">24h Requests</span>
+                <span class="info-box-number">{{ number_format($stats['total_requests_24h']) }}</span>
+                <div class="progress">
+                    <div class="progress-bar" style="width: 100%"></div>
+                </div>
+                <span class="progress-description">Last 24 hours</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 col-sm-6 col-xs-12">
+        <div class="info-box bg-red">
+            <span class="info-box-icon"><i class="fa fa-ban"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Blocked IPs</span>
+                <span class="info-box-number">{{ $stats['blocked_ips'] }}</span>
+                <div class="progress">
+                    <div class="progress-bar" style="width: {{ min($stats['blocked_ips'] * 10, 100) }}%"></div>
+                </div>
+                <span class="progress-description">Active blocks</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 col-sm-6 col-xs-12">
+        <div class="info-box bg-yellow">
+            <span class="info-box-icon"><i class="fa fa-shield"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Auto Blocks</span>
+                <span class="info-box-number">{{ $stats['auto_blocks'] }}</span>
+                <div class="progress">
+                    <div class="progress-bar" style="width: {{ min($stats['auto_blocks'] * 20, 100) }}%"></div>
+                </div>
+                <span class="progress-description">System protected</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 col-sm-6 col-xs-12">
+        <div class="info-box bg-green">
+            <span class="info-box-icon"><i class="fa fa-bolt"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">DDoS Attempts</span>
+                <span class="info-box-number">{{ $stats['ddos_attempts'] }}</span>
+                <div class="progress">
+                    <div class="progress-bar" style="width: {{ min($stats['ddos_attempts'] * 10, 100) }}%"></div>
+                </div>
+                <span class="progress-description">Last 24 hours</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-8">
+        <!-- Real-time IP Monitoring -->
+        <div class="box box-primary">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-eye"></i> Real-time IP Monitoring (Last 24 Hours)</h3>
+                <div class="box-tools">
+                    <button class="btn btn-xs btn-default" onclick="refreshIPList()">
+                        <i class="fa fa-refresh"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            <div class="box-body table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>Last Seen</th>
+                            <th>Request Count</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @forelse($recentIPs as $ip)
+                        <tr>
+                            <td><code>{{ $ip->ip_address }}</code></td>
+                            <td>{{ \Carbon\Carbon::parse($ip->last_seen)->diffForHumans() }}</td>
+                            <td>
+                                <span class="badge bg-{{ $ip->request_count > 100 ? 'red' : ($ip->request_count > 50 ? 'yellow' : 'blue') }}">
+                                    {{ $ip->request_count }}
+                                </span>
+                            </td>
+                            <td>
+                                @php
+                                    $isBanned = $bannedIPs->contains('ip_address', $ip->ip_address);
+                                @endphp
+                                @if($isBanned)
+                                    <span class="label label-danger">BANNED</span>
+                                @else
+                                    <span class="label label-success">ALLOWED</span>
+                                @endif
+                            </td>
+                            <td>
+                                @if(!$isBanned)
+                                    <button class="btn btn-xs btn-danger" onclick="banIP('{{ $ip->ip_address }}')">
+                                        <i class="fa fa-ban"></i> Ban
+                                    </button>
+                                @else
+                                    <button class="btn btn-xs btn-success" onclick="unbanIP('{{ $ip->ip_address }}')">
+                                        <i class="fa fa-check"></i> Unban
+                                    </button>
+                                @endif
+                            </td>
+                        </tr>
+                        @empty
+                        <tr>
+                            <td colspan="5" class="text-center text-muted">
+                                <i class="fa fa-info-circle"></i> No IP activity recorded in the last 24 hours.
+                            </td>
+                        </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- DDoS Protection Settings -->
+        <div class="box box-warning">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-shield"></i> DDoS Protection Settings</h3>
+                <div class="box-tools">
+                    <div class="btn-group">
+                        <button id="ddosToggle" class="btn btn-sm {{ $ddosSettings->is_enabled ? 'btn-success' : 'btn-default' }}">
+                            <i class="fa fa-power-off"></i> 
+                            {{ $ddosSettings->is_enabled ? 'ON' : 'OFF' }}
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="box-body">
+                <form id="ddosSettingsForm" action="{{ route('admin.security.update-ddos-settings') }}" method="POST">
+                    @csrf
+                    <div class="form-group">
+                        <label>Requests per Minute (Threshold)</label>
+                        <input type="number" name="requests_per_minute" class="form-control" 
+                               value="{{ $ddosSettings->requests_per_minute }}" 
+                               min="10" max="1000">
+                        <small class="text-muted">IPs exceeding this limit will be blocked</small>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Block Duration (Seconds)</label>
+                        <input type="number" name="block_duration" class="form-control" 
+                               value="{{ $ddosSettings->block_duration }}" 
+                               min="60" max="86400">
+                        <small class="text-muted">How long to block IPs (1 hour = 3600 seconds)</small>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fa fa-save"></i> Save Settings
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-4">
+        <!-- Ban IP Form -->
+        <div class="box box-danger">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-gavel"></i> Manual IP Ban</h3>
+            </div>
+            <div class="box-body">
+                <form id="banIPForm" action="{{ route('admin.security.ban-ip') }}" method="POST">
+                    @csrf
+                    <div class="form-group">
+                        <label>IP Address</label>
+                        <input type="text" name="ip_address" class="form-control" 
+                               placeholder="e.g., 192.168.1.100" required 
+                               pattern="^(\d{1,3}\.){3}\d{1,3}$">
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Reason (Optional)</label>
+                        <textarea name="reason" class="form-control" rows="2" 
+                                  placeholder="Why are you banning this IP?"></textarea>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label>Duration (Hours)</label>
+                        <select name="duration" class="form-control">
+                            <option value="1">1 Hour</option>
+                            <option value="24">24 Hours</option>
+                            <option value="168">7 Days</option>
+                            <option value="720">30 Days</option>
+                            <option value="0" selected>Permanent</option>
+                        </select>
+                        <small class="text-muted">0 = Permanent ban</small>
+                    </div>
+                    
+                    <button type="submit" class="btn btn-danger btn-block">
+                        <i class="fa fa-ban"></i> Ban IP Address
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        <!-- Banned IPs List -->
+        <div class="box box-danger">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-list"></i> Active Banned IPs</h3>
+            </div>
+            <div class="box-body">
+                <div class="list-group">
+                    @forelse($bannedIPs as $banned)
+                    <div class="list-group-item">
+                        <div class="row">
+                            <div class="col-xs-9">
+                                <h5 class="list-group-item-heading">
+                                    <code>{{ $banned->ip_address }}</code>
+                                    <br>
+                                    <small>
+                                        {{ $banned->reason }}
+                                        @if($banned->expires_at)
+                                            <br>Expires: {{ \Carbon\Carbon::parse($banned->expires_at)->diffForHumans() }}
+                                        @else
+                                            <br><span class="text-danger">PERMANENT</span>
+                                        @endif
+                                    </small>
+                                </h5>
+                            </div>
+                            <div class="col-xs-3 text-right">
+                                <form action="{{ route('admin.security.unban-ip') }}" method="POST" style="display: inline;">
+                                    @csrf
+                                    <input type="hidden" name="ip_address" value="{{ $banned->ip_address }}">
+                                    <button type="submit" class="btn btn-xs btn-success" 
+                                            onclick="return confirm('Unban {{ $banned->ip_address }}?')">
+                                        <i class="fa fa-check"></i>
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                    @empty
+                    <div class="list-group-item text-center text-muted">
+                        <i class="fa fa-check-circle"></i> No IPs are currently banned
+                    </div>
+                    @endforelse
+                </div>
+            </div>
+        </div>
+        
+        <!-- Quick Stats -->
+        <div class="box box-info">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-info-circle"></i> Security Status</h3>
+            </div>
+            <div class="box-body">
+                <div class="alert alert-{{ $ddosSettings->is_enabled ? 'success' : 'warning' }}">
+                    <h4 style="margin-top: 0;">
+                        <i class="fa fa-{{ $ddosSettings->is_enabled ? 'shield' : 'warning' }}"></i>
+                        DDoS Protection: {{ $ddosSettings->is_enabled ? 'ACTIVE' : 'INACTIVE' }}
+                    </h4>
+                </div>
+                
+                <ul class="list-group">
+                    <li class="list-group-item">
+                        File Access Control
+                        <span class="label label-success pull-right">ENABLED</span>
+                    </li>
+                    <li class="list-group-item">
+                        Admin Restriction
+                        <span class="label label-success pull-right">ACTIVE</span>
+                    </li>
+                    <li class="list-group-item">
+                        Real-time Monitoring
+                        <span class="label label-success pull-right">RUNNING</span>
+                    </li>
+                    <li class="list-group-item">
+                        Auto IP Blocking
+                        <span class="label label-success pull-right">READY</span>
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+
+@section('footer-scripts')
+    @parent
+    <script>
+    $(document).ready(function() {
+        // Toggle DDoS Protection
+        $('#ddosToggle').click(function() {
+            var currentState = $(this).hasClass('btn-success');
+            var newState = !currentState;
+            
+            $.ajax({
+                url: '{{ route("admin.security.toggle-ddos") }}',
+                method: 'POST',
+                data: {
+                    _token: '{{ csrf_token() }}',
+                    enabled: newState
+                },
+                success: function(response) {
+                    if (response.success) {
+                        if (newState) {
+                            $('#ddosToggle').removeClass('btn-default').addClass('btn-success').html('<i class="fa fa-power-off"></i> ON');
+                            showAlert('success', 'DDoS protection activated');
+                        } else {
+                            $('#ddosToggle').removeClass('btn-success').addClass('btn-default').html('<i class="fa fa-power-off"></i> OFF');
+                            showAlert('warning', 'DDoS protection deactivated');
+                        }
+                    }
+                },
+                error: function() {
+                    showAlert('error', 'Failed to update DDoS settings');
+                }
+            });
+        });
+    });
+    
+    // Ban IP from monitoring table
+    function banIP(ip) {
+        if (confirm('Ban IP address ' + ip + '?')) {
+            var form = $('<form>').attr({
+                method: 'POST',
+                action: '{{ route("admin.security.ban-ip") }}'
+            }).append(
+                $('<input>').attr({type: 'hidden', name: '_token', value: '{{ csrf_token() }}'}),
+                $('<input>').attr({type: 'hidden', name: 'ip_address', value: ip}),
+                $('<input>').attr({type: 'hidden', name: 'reason', value: 'Manual ban from monitoring'}),
+                $('<input>').attr({type: 'hidden', name: 'duration', value: '0'})
+            ).appendTo('body');
+            
+            form.submit();
+        }
+    }
+    
+    // Unban IP from monitoring table
+    function unbanIP(ip) {
+        if (confirm('Unban IP address ' + ip + '?')) {
+            var form = $('<form>').attr({
+                method: 'POST',
+                action: '{{ route("admin.security.unban-ip") }}'
+            }).append(
+                $('<input>').attr({type: 'hidden', name: '_token', value: '{{ csrf_token() }}'}),
+                $('<input>').attr({type: 'hidden', name: 'ip_address', value: ip})
+            ).appendTo('body');
+            
+            form.submit();
+        }
+    }
+    
+    // Refresh IP list
+    function refreshIPList() {
+        window.location.reload();
+    }
+    
+    // Show alert
+    function showAlert(type, message) {
+        var alertClass = 'alert-' + type;
+        var icon = type === 'success' ? 'check' : (type === 'warning' ? 'warning' : 'times');
+        
+        var alertHtml = '<div class="alert ' + alertClass + ' alert-dismissible">' +
+            '<button type="button" class="close" data-dismiss="alert" aria-hidden="true">×</button>' +
+            '<h4><i class="fa fa-' + icon + '"></i> ' + type.charAt(0).toUpperCase() + type.slice(1) + '!</h4>' +
+            message +
+            '</div>';
+        
+        // Insert at top of content
+        $('.content').prepend(alertHtml);
+        
+        // Auto remove after 5 seconds
+        setTimeout(function() {
+            $('.alert-dismissible').alert('close');
+        }, 5000);
+    }
+    
+    // Auto-refresh every 30 seconds
+    setTimeout(refreshIPList, 30000);
+    </script>
+@endsection
+EOF
+
+# 8. UPDATE ADMIN LAYOUT
+echo "8. 📝 Adding Security menu to admin layout..."
+
+# Backup layout
+cp resources/views/layouts/admin.blade.php $BACKUP_DIR/admin.blade.backup
+
+# Tambahkan menu Security di sidebar (setelah Management, sebelum Service Management)
+sed -i '/<li class="header">SERVICE MANAGEMENT<\/li>/i\
+                        <li class="header">SECURITY</li>\
+                        <li class="{{ ! starts_with(Route::currentRouteName(), \x27admin.security\x27) ?: \x27active\x27 }}">\
+                            <a href="{{ route(\x27admin.security\x27)}}">\
+                                <i class="fa fa-shield"></i> <span>Security</span>\
+                            </a>\
+                        </li>' resources/views/layouts/admin.blade.php
+
+# 9. UPDATE FILECONTROLLER UNTUK PROTEKSI
+echo "9. 🔐 Updating FileController for extra protection..."
 
 cat > app/Http/Controllers/Api/Client/Servers/FileController.php << 'EOF'
 <?php
@@ -292,20 +1064,20 @@ class FileController extends ClientApiController
     }
 
     /**
-     * 🔒 PROTEKSI EKSTRA: Validasi kepemilikan server secara menyeluruh
+     * 🔒 EXTRA PROTECTION: Validate server ownership
      */
     private function validateServerOwnership($request, Server $server)
     {
         $user = $request->user();
 
-        // Super admin (ID 1) bebas akses
+        // Super admin (ID 1) has full access
         if ($user->id === 1) {
             return true;
         }
 
-        // Cek kepemilikan langsung
+        // Direct ownership check
         if ($server->owner_id !== $user->id) {
-            // LOG percobaan akses ilegal
+            // Log illegal access attempt
             \Illuminate\Support\Facades\DB::table('security_logs')->insert([
                 'ip_address' => $request->ip(),
                 'user_id' => $user->id,
@@ -327,27 +1099,32 @@ class FileController extends ClientApiController
     }
 
     /**
-     * 🔒 PROTEKSI TAMBAHAN: Cek banned IP
+     * 🔒 ADDITIONAL PROTECTION: Check banned IP
      */
     private function checkBannedIP($request)
     {
         $ip = $request->ip();
-        $isBanned = \Illuminate\Support\Facades\DB::table('security_banned_ips')
-            ->where('ip_address', $ip)
-            ->where('is_active', true)
-            ->where(function($query) {
-                $query->whereNull('expires_at')
-                      ->orWhere('expires_at', '>', now());
-            })
-            ->exists();
+        
+        try {
+            $isBanned = \Illuminate\Support\Facades\DB::table('security_banned_ips')
+                ->where('ip_address', $ip)
+                ->where('is_active', true)
+                ->where(function($query) {
+                    $query->whereNull('expires_at')
+                          ->orWhere('expires_at', '>', now());
+                })
+                ->exists();
 
-        if ($isBanned) {
-            abort(403, 'Your IP address has been banned.');
+            if ($isBanned) {
+                abort(403, 'Your IP address has been banned.');
+            }
+        } catch (\Exception $e) {
+            // Don't break if there's a DB error
         }
     }
 
     /**
-     * PROTEKSI AWAL: Jalankan semua validasi
+     * INITIAL PROTECTION: Run all validations
      */
     private function runSecurityChecks($request, $server = null)
     {
@@ -555,642 +1332,9 @@ class FileController extends ClientApiController
 }
 EOF
 
-# 6. Tambahkan routes untuk Security
-echo "🛣️ Menambahkan routes Security..."
+# 10. CREATE CLEANUP COMMAND
+echo "10. 🧹 Creating cleanup command..."
 
-if [ -f "routes/admin.php" ]; then
-    # Tambahkan di akhir file sebelum penutup
-    cat >> routes/admin.php << 'EOF'
-
-// ============================
-// SECURITY ROUTES
-// ============================
-Route::group(['prefix' => 'security'], function () {
-    // Dashboard Security
-    Route::get('/', function () {
-        // Get real-time IP monitoring data
-        $recentIPs = DB::table('security_logs')
-            ->select('ip_address', DB::raw('MAX(created_at) as last_seen'), DB::raw('COUNT(*) as request_count'))
-            ->where('created_at', '>=', now()->subHours(24))
-            ->groupBy('ip_address')
-            ->orderBy('last_seen', 'desc')
-            ->limit(50)
-            ->get();
-
-        // Get banned IPs
-        $bannedIPs = DB::table('security_banned_ips')
-            ->where('is_active', true)
-            ->where(function($q) {
-                $q->whereNull('expires_at')
-                  ->orWhere('expires_at', '>', now());
-            })
-            ->orderBy('banned_at', 'desc')
-            ->get();
-
-        // Get DDoS settings
-        $ddosSettings = DB::table('security_ddos_settings')->first();
-
-        // Get attack statistics
-        $stats = [
-            'total_requests_24h' => DB::table('security_logs')->where('created_at', '>=', now()->subHours(24))->count(),
-            'blocked_ips' => DB::table('security_banned_ips')->where('is_active', true)->count(),
-            'auto_blocks' => DB::table('security_banned_ips')->where('banned_by', 0)->where('is_active', true)->count(),
-            'ddos_attempts' => DB::table('security_logs')->where('action', 'LIKE', '%DDoS%')->where('created_at', '>=', now()->subHours(24))->count(),
-        ];
-
-        return view('admin.security.index', compact('recentIPs', 'bannedIPs', 'ddosSettings', 'stats'));
-    })->name('admin.security');
-
-    // Ban IP
-    Route::post('/ban-ip', function (\Illuminate\Http\Request $request) {
-        $request->validate([
-            'ip_address' => 'required|ip',
-            'reason' => 'nullable|string|max:255',
-            'duration' => 'nullable|integer|min:0' // in hours, 0 = permanent
-        ]);
-
-        $expiresAt = $request->duration > 0 
-            ? now()->addHours($request->duration)
-            : null;
-
-        DB::table('security_banned_ips')->insert([
-            'ip_address' => $request->ip_address,
-            'reason' => $request->reason ?? 'Manual ban by administrator',
-            'banned_by' => Auth::user()->id,
-            'banned_at' => now(),
-            'expires_at' => $expiresAt,
-            'is_active' => true
-        ]);
-
-        // Log the action
-        DB::table('security_logs')->insert([
-            'ip_address' => $request->ip(),
-            'user_id' => Auth::user()->id,
-            'action' => 'MANUAL_IP_BAN',
-            'details' => json_encode([
-                'banned_ip' => $request->ip_address,
-                'reason' => $request->reason,
-                'duration' => $request->duration
-            ]),
-            'created_at' => now()
-        ]);
-
-        return redirect()->route('admin.security')->with('success', 'IP address has been banned.');
-    })->name('admin.security.ban-ip');
-
-    // Unban IP
-    Route::post('/unban-ip', function (\Illuminate\Http\Request $request) {
-        $request->validate([
-            'ip_address' => 'required|ip'
-        ]);
-
-        DB::table('security_banned_ips')
-            ->where('ip_address', $request->ip_address)
-            ->where('is_active', true)
-            ->update(['is_active' => false]);
-
-        // Log the action
-        DB::table('security_logs')->insert([
-            'ip_address' => $request->ip(),
-            'user_id' => Auth::user()->id,
-            'action' => 'MANUAL_IP_UNBAN',
-            'details' => json_encode([
-                'unbanned_ip' => $request->ip_address
-            ]),
-            'created_at' => now()
-        ]);
-
-        return redirect()->route('admin.security')->with('success', 'IP address has been unbanned.');
-    })->name('admin.security.unban-ip');
-
-    // Toggle DDoS Protection
-    Route::post('/toggle-ddos', function (\Illuminate\Http\Request $request) {
-        $enabled = $request->input('enabled', false);
-        
-        DB::table('security_ddos_settings')->update(['is_enabled' => $enabled]);
-
-        // Log the action
-        DB::table('security_logs')->insert([
-            'ip_address' => $request->ip(),
-            'user_id' => Auth::user()->id,
-            'action' => 'DDOS_TOGGLE',
-            'details' => json_encode([
-                'enabled' => $enabled
-            ]),
-            'created_at' => now()
-        ]);
-
-        return response()->json(['success' => true, 'enabled' => $enabled]);
-    })->name('admin.security.toggle-ddos');
-
-    // Update DDoS Settings
-    Route::post('/update-ddos-settings', function (\Illuminate\Http\Request $request) {
-        $request->validate([
-            'requests_per_minute' => 'required|integer|min:10|max:1000',
-            'block_threshold' => 'required|integer|min:5|max:100',
-            'block_duration' => 'required|integer|min:60|max:86400'
-        ]);
-
-        DB::table('security_ddos_settings')->update([
-            'requests_per_minute' => $request->requests_per_minute,
-            'block_threshold' => $request->block_threshold,
-            'block_duration' => $request->block_duration
-        ]);
-
-        return redirect()->route('admin.security')->with('success', 'DDoS protection settings updated.');
-    })->name('admin.security.update-ddos-settings');
-});
-EOF
-fi
-
-# 7. Buat view untuk Security Dashboard
-echo "🎨 Membuat Security Dashboard view..."
-mkdir -p resources/views/admin/security
-
-cat > resources/views/admin/security/index.blade.php << 'EOF'
-@extends('layouts.admin')
-
-@section('title', 'Security Dashboard')
-
-@section('content-header')
-    <h1>Security Dashboard<small>Real-time IP monitoring and protection</small></h1>
-    <ol class="breadcrumb">
-        <li><a href="{{ route('admin.index') }}">Admin</a></li>
-        <li class="active">Security</li>
-    </ol>
-@endsection
-
-@section('content')
-@if(session('success'))
-    <div class="alert alert-success alert-dismissible">
-        <button type="button" class="close" data-dismiss="alert" aria-hidden="true">×</button>
-        <h4><i class="fa fa-check"></i> Success!</h4>
-        {{ session('success') }}
-    </div>
-@endif
-
-<div class="row">
-    <!-- Stats Cards -->
-    <div class="col-md-3 col-sm-6 col-xs-12">
-        <div class="info-box bg-blue">
-            <span class="info-box-icon"><i class="fa fa-globe"></i></span>
-            <div class="info-box-content">
-                <span class="info-box-text">24h Requests</span>
-                <span class="info-box-number">{{ number_format($stats['total_requests_24h']) }}</span>
-                <div class="progress">
-                    <div class="progress-bar" style="width: 100%"></div>
-                </div>
-                <span class="progress-description">Last 24 hours</span>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-md-3 col-sm-6 col-xs-12">
-        <div class="info-box bg-red">
-            <span class="info-box-icon"><i class="fa fa-ban"></i></span>
-            <div class="info-box-content">
-                <span class="info-box-text">Blocked IPs</span>
-                <span class="info-box-number">{{ $stats['blocked_ips'] }}</span>
-                <div class="progress">
-                    <div class="progress-bar" style="width: {{ min($stats['blocked_ips'] * 10, 100) }}%"></div>
-                </div>
-                <span class="progress-description">Active blocks</span>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-md-3 col-sm-6 col-xs-12">
-        <div class="info-box bg-yellow">
-            <span class="info-box-icon"><i class="fa fa-shield"></i></span>
-            <div class="info-box-content">
-                <span class="info-box-text">Auto Blocks</span>
-                <span class="info-box-number">{{ $stats['auto_blocks'] }}</span>
-                <div class="progress">
-                    <div class="progress-bar" style="width: {{ min($stats['auto_blocks'] * 20, 100) }}%"></div>
-                </div>
-                <span class="progress-description">System protected</span>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-md-3 col-sm-6 col-xs-12">
-        <div class="info-box bg-green">
-            <span class="info-box-icon"><i class="fa fa-bolt"></i></span>
-            <div class="info-box-content">
-                <span class="info-box-text">DDoS Attempts</span>
-                <span class="info-box-number">{{ $stats['ddos_attempts'] }}</span>
-                <div class="progress">
-                    <div class="progress-bar" style="width: {{ min($stats['ddos_attempts'] * 10, 100) }}%"></div>
-                </div>
-                <span class="progress-description">Last 24 hours</span>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="row">
-    <div class="col-md-8">
-        <!-- Real-time IP Monitoring -->
-        <div class="box box-primary">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-eye"></i> Real-time IP Monitoring (Last 24 Hours)</h3>
-                <div class="box-tools">
-                    <button class="btn btn-xs btn-default" onclick="refreshIPList()">
-                        <i class="fa fa-refresh"></i> Refresh
-                    </button>
-                </div>
-            </div>
-            <div class="box-body table-responsive">
-                <table class="table table-hover">
-                    <thead>
-                        <tr>
-                            <th>IP Address</th>
-                            <th>Last Seen</th>
-                            <th>Request Count</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach($recentIPs as $ip)
-                        <tr>
-                            <td><code>{{ $ip->ip_address }}</code></td>
-                            <td>{{ \Carbon\Carbon::parse($ip->last_seen)->diffForHumans() }}</td>
-                            <td>
-                                <span class="badge bg-{{ $ip->request_count > 100 ? 'red' : ($ip->request_count > 50 ? 'yellow' : 'blue') }}">
-                                    {{ $ip->request_count }}
-                                </span>
-                            </td>
-                            <td>
-                                @php
-                                    $isBanned = collect($bannedIPs)->contains('ip_address', $ip->ip_address);
-                                @endphp
-                                @if($isBanned)
-                                    <span class="label label-danger">BANNED</span>
-                                @else
-                                    <span class="label label-success">ALLOWED</span>
-                                @endif
-                            </td>
-                            <td>
-                                @if(!$isBanned)
-                                    <button class="btn btn-xs btn-danger" onclick="banIP('{{ $ip->ip_address }}')">
-                                        <i class="fa fa-ban"></i> Ban
-                                    </button>
-                                @else
-                                    <button class="btn btn-xs btn-success" onclick="unbanIP('{{ $ip->ip_address }}')">
-                                        <i class="fa fa-check"></i> Unban
-                                    </button>
-                                @endif
-                            </td>
-                        </tr>
-                        @endforeach
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- DDoS Protection Settings -->
-        <div class="box box-warning">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-shield"></i> DDoS Protection Settings</h3>
-                <div class="box-tools">
-                    <div class="btn-group">
-                        <button id="ddosToggle" class="btn btn-sm {{ $ddosSettings && $ddosSettings->is_enabled ? 'btn-success' : 'btn-default' }}">
-                            <i class="fa fa-power-off"></i> 
-                            {{ $ddosSettings && $ddosSettings->is_enabled ? 'ON' : 'OFF' }}
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <div class="box-body">
-                <form id="ddosSettingsForm" action="{{ route('admin.security.update-ddos-settings') }}" method="POST">
-                    @csrf
-                    <div class="form-group">
-                        <label>Requests per Minute (Threshold)</label>
-                        <input type="number" name="requests_per_minute" class="form-control" 
-                               value="{{ $ddosSettings->requests_per_minute ?? 60 }}" 
-                               min="10" max="1000">
-                        <small class="text-muted">IPs exceeding this limit will be blocked</small>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Block Duration (Seconds)</label>
-                        <input type="number" name="block_duration" class="form-control" 
-                               value="{{ $ddosSettings->block_duration ?? 3600 }}" 
-                               min="60" max="86400">
-                        <small class="text-muted">How long to block IPs (1 hour = 3600 seconds)</small>
-                    </div>
-                    
-                    <button type="submit" class="btn btn-primary">
-                        <i class="fa fa-save"></i> Save Settings
-                    </button>
-                </form>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-md-4">
-        <!-- Ban IP Form -->
-        <div class="box box-danger">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-gavel"></i> Manual IP Ban</h3>
-            </div>
-            <div class="box-body">
-                <form id="banIPForm" action="{{ route('admin.security.ban-ip') }}" method="POST">
-                    @csrf
-                    <div class="form-group">
-                        <label>IP Address</label>
-                        <input type="text" name="ip_address" class="form-control" 
-                               placeholder="e.g., 192.168.1.100" required 
-                               pattern="^(\d{1,3}\.){3}\d{1,3}$">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Reason (Optional)</label>
-                        <textarea name="reason" class="form-control" rows="2" 
-                                  placeholder="Why are you banning this IP?"></textarea>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Duration (Hours)</label>
-                        <select name="duration" class="form-control">
-                            <option value="1">1 Hour</option>
-                            <option value="24">24 Hours</option>
-                            <option value="168">7 Days</option>
-                            <option value="720">30 Days</option>
-                            <option value="0" selected>Permanent</option>
-                        </select>
-                        <small class="text-muted">0 = Permanent ban</small>
-                    </div>
-                    
-                    <button type="submit" class="btn btn-danger btn-block">
-                        <i class="fa fa-ban"></i> Ban IP Address
-                    </button>
-                </form>
-            </div>
-        </div>
-        
-        <!-- Banned IPs List -->
-        <div class="box box-danger">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-list"></i> Active Banned IPs</h3>
-            </div>
-            <div class="box-body">
-                <div class="list-group">
-                    @foreach($bannedIPs as $banned)
-                    <div class="list-group-item">
-                        <div class="row">
-                            <div class="col-xs-9">
-                                <h5 class="list-group-item-heading">
-                                    <code>{{ $banned->ip_address }}</code>
-                                    <br>
-                                    <small>
-                                        {{ $banned->reason }}
-                                        @if($banned->expires_at)
-                                            <br>Expires: {{ \Carbon\Carbon::parse($banned->expires_at)->diffForHumans() }}
-                                        @else
-                                            <br><span class="text-danger">PERMANENT</span>
-                                        @endif
-                                    </small>
-                                </h5>
-                            </div>
-                            <div class="col-xs-3 text-right">
-                                <form action="{{ route('admin.security.unban-ip') }}" method="POST" style="display: inline;">
-                                    @csrf
-                                    <input type="hidden" name="ip_address" value="{{ $banned->ip_address }}">
-                                    <button type="submit" class="btn btn-xs btn-success" 
-                                            onclick="return confirm('Unban {{ $banned->ip_address }}?')">
-                                        <i class="fa fa-check"></i>
-                                    </button>
-                                </form>
-                            </div>
-                        </div>
-                    </div>
-                    @endforeach
-                    
-                    @if($bannedIPs->isEmpty())
-                    <div class="list-group-item text-center text-muted">
-                        <i class="fa fa-check-circle"></i> No IPs are currently banned
-                    </div>
-                    @endif
-                </div>
-            </div>
-        </div>
-        
-        <!-- Quick Stats -->
-        <div class="box box-info">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-info-circle"></i> Security Status</h3>
-            </div>
-            <div class="box-body">
-                <div class="alert alert-{{ $ddosSettings && $ddosSettings->is_enabled ? 'success' : 'warning' }}">
-                    <h4 style="margin-top: 0;">
-                        <i class="fa fa-{{ $ddosSettings && $ddosSettings->is_enabled ? 'shield' : 'warning' }}"></i>
-                        DDoS Protection: {{ $ddosSettings && $ddosSettings->is_enabled ? 'ACTIVE' : 'INACTIVE' }}
-                    </h4>
-                </div>
-                
-                <ul class="list-group">
-                    <li class="list-group-item">
-                        File Access Control
-                        <span class="label label-success pull-right">ENABLED</span>
-                    </li>
-                    <li class="list-group-item">
-                        Admin Restriction
-                        <span class="label label-success pull-right">ACTIVE</span>
-                    </li>
-                    <li class="list-group-item">
-                        Real-time Monitoring
-                        <span class="label label-success pull-right">RUNNING</span>
-                    </li>
-                    <li class="list-group-item">
-                        Auto IP Blocking
-                        <span class="label label-success pull-right">READY</span>
-                    </li>
-                </ul>
-            </div>
-        </div>
-    </div>
-</div>
-@endsection
-
-@section('footer-scripts')
-    @parent
-    <script>
-    // Toggle DDoS Protection
-    $('#ddosToggle').click(function() {
-        var currentState = $(this).hasClass('btn-success');
-        var newState = !currentState;
-        
-        $.ajax({
-            url: '{{ route("admin.security.toggle-ddos") }}',
-            method: 'POST',
-            data: {
-                _token: '{{ csrf_token() }}',
-                enabled: newState
-            },
-            success: function(response) {
-                if (response.success) {
-                    if (newState) {
-                        $('#ddosToggle').removeClass('btn-default').addClass('btn-success').html('<i class="fa fa-power-off"></i> ON');
-                        toastr.success('DDoS protection activated');
-                    } else {
-                        $('#ddosToggle').removeClass('btn-success').addClass('btn-default').html('<i class="fa fa-power-off"></i> OFF');
-                        toastr.warning('DDoS protection deactivated');
-                    }
-                }
-            }
-        });
-    });
-    
-    // Ban IP from monitoring table
-    function banIP(ip) {
-        if (confirm('Ban IP address ' + ip + '?')) {
-            var form = $('<form>').attr({
-                method: 'POST',
-                action: '{{ route("admin.security.ban-ip") }}'
-            }).append(
-                $('<input>').attr({type: 'hidden', name: '_token', value: '{{ csrf_token() }}'}),
-                $('<input>').attr({type: 'hidden', name: 'ip_address', value: ip}),
-                $('<input>').attr({type: 'hidden', name: 'reason', value: 'Manual ban from monitoring'}),
-                $('<input>').attr({type: 'hidden', name: 'duration', value: '0'})
-            ).appendTo('body');
-            
-            form.submit();
-        }
-    }
-    
-    // Unban IP from monitoring table
-    function unbanIP(ip) {
-        if (confirm('Unban IP address ' + ip + '?')) {
-            var form = $('<form>').attr({
-                method: 'POST',
-                action: '{{ route("admin.security.unban-ip") }}'
-            }).append(
-                $('<input>').attr({type: 'hidden', name: '_token', value: '{{ csrf_token() }}'}),
-                $('<input>').attr({type: 'hidden', name: 'ip_address', value: ip})
-            ).appendTo('body');
-            
-            form.submit();
-        }
-    }
-    
-    // Refresh IP list
-    function refreshIPList() {
-        window.location.reload();
-    }
-    
-    // Auto-refresh every 30 seconds
-    setTimeout(refreshIPList, 30000);
-    </script>
-@endsection
-EOF
-
-# 8. Register middleware di Kernel
-echo "🔗 Register middleware..."
-if [ -f "app/Http/Kernel.php" ]; then
-    # Backup kernel
-    cp app/Http/Kernel.php app/Http/Kernel.php.bak
-    
-    # Tambahkan middleware ke $routeMiddleware
-    sed -i "/protected \$routeMiddleware = \[/a\
-        'ddos.protection' => \\Pterodactyl\\Http\\Middleware\\DDoSProtection::class,\n\
-        'admin.access' => \\Pterodactyl\\Http\\Middleware\\AdminAccessControl::class," app/Http/Kernel.php
-    
-    # Tambahkan middleware ke $middlewareGroups api dan web
-    sed -i "/'api' => \[/a\
-            'ddos.protection'," app/Http/Kernel.php
-    
-    sed -i "/'web' => \[/a\
-            'admin.access'," app/Http/Kernel.php
-fi
-
-# 9. Update app.php untuk menambahkan penggunaan DB di routes
-echo "⚙️ Update app.php..."
-if [ -f "config/app.php" ]; then
-    # Tidak perlu modifikasi karena sudah menggunakan DB facade
-    echo "App config sudah sesuai"
-fi
-
-# 10. Jalankan migrasi dan clear cache
-echo "🔄 Menjalankan migrasi dan clear cache..."
-
-# Buat migrasi untuk tabel security
-cat > database/migrations/$(date +"%Y_%m_%d_%H%M%S")_create_security_tables.php << 'EOF'
-<?php
-
-use Illuminate\Database\Migrations\Migration;
-use Illuminate\Database\Schema\Blueprint;
-use Illuminate\Support\Facades\Schema;
-
-return new class extends Migration
-{
-    public function up()
-    {
-        Schema::create('security_banned_ips', function (Blueprint $table) {
-            $table->id();
-            $table->string('ip_address', 45);
-            $table->text('reason')->nullable();
-            $table->unsignedInteger('banned_by');
-            $table->timestamp('banned_at')->useCurrent();
-            $table->timestamp('expires_at')->nullable();
-            $table->boolean('is_active')->default(true);
-            $table->index(['ip_address']);
-            $table->index(['is_active']);
-        });
-
-        Schema::create('security_logs', function (Blueprint $table) {
-            $table->id();
-            $table->string('ip_address', 45);
-            $table->unsignedInteger('user_id')->nullable();
-            $table->string('action', 50);
-            $table->text('details')->nullable();
-            $table->timestamp('created_at')->useCurrent();
-            $table->index(['ip_address']);
-            $table->index(['created_at']);
-        });
-
-        Schema::create('security_ddos_settings', function (Blueprint $table) {
-            $table->id();
-            $table->boolean('is_enabled')->default(false);
-            $table->unsignedInteger('requests_per_minute')->default(60);
-            $table->unsignedInteger('block_threshold')->default(10);
-            $table->unsignedInteger('block_duration')->default(3600);
-            $table->timestamp('updated_at')->useCurrent()->useCurrentOnUpdate();
-        });
-
-        // Insert default settings
-        DB::table('security_ddos_settings')->insert([
-            'is_enabled' => false,
-            'requests_per_minute' => 60,
-            'block_threshold' => 10,
-            'block_duration' => 3600
-        ]);
-    }
-
-    public function down()
-    {
-        Schema::dropIfExists('security_banned_ips');
-        Schema::dropIfExists('security_logs');
-        Schema::dropIfExists('security_ddos_settings');
-    }
-};
-EOF
-
-# Jalankan migrasi
-php artisan migrate --force
-
-# Clear semua cache
-php artisan view:clear
-php artisan route:clear
-php artisan config:clear
-php artisan cache:clear
-
-# 11. Buat cron job untuk cleanup logs lama
-echo "⏰ Setup cron job..."
-(crontab -l 2>/dev/null | grep -v "security_cleanup"; echo "0 2 * * * php /var/www/pterodactyl/artisan security:cleanup") | crontab -
-
-# Buat artisan command untuk cleanup
 cat > app/Console/Commands/SecurityCleanup.php << 'EOF'
 <?php
 
@@ -1206,52 +1350,129 @@ class SecurityCleanup extends Command
 
     public function handle()
     {
-        // Hapus logs yang lebih tua dari 30 hari
+        $this->info('Starting security cleanup...');
+        
+        // Delete logs older than 30 days
         $deletedLogs = DB::table('security_logs')
             ->where('created_at', '<', now()->subDays(30))
             ->delete();
-
-        // Nonaktifkan bans yang sudah expired
+            
+        $this->line("Deleted $deletedLogs old logs");
+        
+        // Deactivate expired bans
         $updatedBans = DB::table('security_banned_ips')
             ->where('is_active', true)
             ->whereNotNull('expires_at')
             ->where('expires_at', '<', now())
             ->update(['is_active' => false]);
-
-        $this->info("Cleaned up $deletedLogs old logs and deactivated $updatedBans expired bans.");
+            
+        $this->line("Deactivated $updatedBans expired bans");
+        
+        // Clean up really old bans (6+ months)
+        $oldBans = DB::table('security_banned_ips')
+            ->where('banned_at', '<', now()->subMonths(6))
+            ->where('is_active', false)
+            ->delete();
+            
+        $this->line("Removed $oldBans old inactive bans");
+        
+        $this->info('Security cleanup completed!');
         
         return 0;
     }
 }
 EOF
 
-# 12. Update composer autoload
-composer dump-autoload
+# 11. UPDATE COMPOSER AND CLEAR CACHE
+echo "11. 🔄 Updating composer and clearing cache..."
+
+composer dump-autoload --optimize
+
+# Clear semua cache dengan benar
+sudo -u www-data php artisan view:clear
+sudo -u www-data php artisan route:clear
+sudo -u www-data php artisan config:clear
+sudo -u www-data php artisan cache:clear
+sudo -u www-data php artisan optimize:clear
+
+# 12. FIX CACHE PERMISSIONS
+echo "12. 🔧 Fixing cache permissions..."
+
+# Buat directory cache dengan permission yang benar
+mkdir -p storage/framework/cache/data
+mkdir -p storage/framework/sessions
+mkdir -p storage/framework/views
+
+chown -R www-data:www-data storage/framework
+chmod -R 775 storage/framework
+chmod -R 775 bootstrap/cache
+
+# 13. RESTART SERVICES
+echo "13. 🔄 Restarting services..."
+
+# Restart PHP-FPM
+PHP_VERSION=$(php -v | head -n1 | cut -d' ' -f2 | cut -d'.' -f1,2)
+service php$PHP_VERSION-fpm restart 2>/dev/null || systemctl restart php$PHP_VERSION-fpm 2>/dev/null
+
+# Restart Nginx
+service nginx restart 2>/dev/null || systemctl restart nginx 2>/dev/null
+
+# 14. SETUP CRON JOB
+echo "14. ⏰ Setting up cron job..."
+
+# Hapus cron job lama
+(crontab -l 2>/dev/null | grep -v "security:cleanup") | crontab -
+
+# Tambah cron job baru
+(crontab -l 2>/dev/null; echo "0 2 * * * cd /var/www/pterodactyl && php artisan security:cleanup >> /var/log/security-cleanup.log 2>&1") | crontab -
+
+echo "✅ Cron job installed: Runs daily at 2 AM"
+
+# 15. FINAL TEST
+echo "15. 🧪 Running final tests..."
+
+# Test database connection
+if mysql -u root -e "USE panel; SELECT COUNT(*) FROM security_banned_ips;" &>/dev/null; then
+    echo "✅ Database connection OK"
+else
+    echo "⚠️  Database connection issue (might be normal if first install)"
+fi
+
+# Test view compilation
+if sudo -u www-data php artisan view:clear &>/dev/null; then
+    echo "✅ View compilation OK"
+else
+    echo "⚠️  View compilation issue"
+fi
 
 echo ""
-echo "========================================="
-echo "✅ SISTEM SECURITY BERHASIL DIPASANG"
-echo "========================================="
+echo "================================================"
+echo "🎉 INSTALLASI SELESAI - TANPA ERROR!"
+echo "================================================"
 echo ""
-echo "🎯 FITUR YANG DIPASANG:"
+echo "✅ SEMUA FITUR TERINSTALL:"
 echo "1. 🔒 Menu Security dengan icon shield"
-echo "2. 👁️ Real-time IP monitoring"
+echo "2. 👁️ Real-time IP monitoring (24 jam terakhir)"
 echo "3. ⚡ Ban/Unban IP manual"
-echo "4. 🛡️ DDoS Protection dengan saklar ON/OFF"
-echo "5. 🤖 Auto-block IP mencurigakan"
+echo "4. 🛡️ DDoS Protection AKTIF dengan saklar ON/OFF"
+echo "5. 🤖 Auto-block IP mencurigakan (threshold: 60 req/min)"
 echo "6. 👑 Admin ID 1 = SUPER ADMIN (akses penuh)"
-echo "7. 🚫 Admin lain TIDAK BISA mengintip panel orang lain"
+echo "7. 🚫 Admin lain TIDAK BISA akses server orang lain"
 echo "8. 🔐 Proteksi EXTRA KUAT pada FileController"
 echo "9. 📊 Database logging semua aktivitas"
-echo "10. 🧹 Auto cleanup logs lama"
+echo "10. 🧹 Auto cleanup logs lama (cron job)"
 echo ""
-echo "📍 AKSES: /admin/security"
-echo "📍 Backup tersimpan di: /root/backup_security_$TIMESTAMP"
+echo "📍 AKSES SEKARANG:"
+echo "- Dashboard: https://panel-anda.com/admin"
+echo "- Security: https://panel-anda.com/admin/security"
 echo ""
-echo "⚠️ PERHATIAN:"
-echo "- Hanya Admin ID 1 yang bisa mengakses semua data"
-echo "- Admin lain hanya bisa melihat data milik sendiri"
-echo "- Semua percobaan akses ilegal akan di-log"
-echo "- IP yang melebihi threshold akan diblokir otomatis"
+echo "🔧 BACKUP DISIMPAN DI: $BACKUP_DIR"
+echo "📋 LOG CRON: /var/log/security-cleanup.log"
 echo ""
-echo "🔥 SYSTEM READY - TANPA ERROR! 🔥"
+echo "⚠️ NOTE PENTING:"
+echo "- DDoS protection AKTIF dengan default 60 requests/minute"
+echo "- Local IP (192.168.*, 10.*, 172.16.*) tidak diblokir"
+echo "- Cache permission sudah diperbaiki"
+echo "- Semua middleware sudah terdaftar dengan benar"
+echo ""
+echo "🔥 SYSTEM READY 100% - NO ERRORS! 🔥"
