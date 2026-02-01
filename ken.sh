@@ -14,8 +14,8 @@ if [ -f "resources/views/layouts/admin.blade.php" ]; then
     cp resources/views/layouts/admin.blade.php resources/views/layouts/admin.blade.php.backup
 fi
 
-# 2. Buat SIMPLE admin layout tanpa partials
-echo "2. Creating simple admin layout..."
+# 2. Buat admin layout default dengan Security menu
+echo "2. Creating admin layout with Security menu..."
 mkdir -p resources/views/layouts
 
 cat > resources/views/layouts/admin.blade.php << 'EOF'
@@ -46,15 +46,9 @@ cat > resources/views/layouts/admin.blade.php << 'EOF'
             background-size: 24px 24px;
             padding-left: 30px;
         }
-        .security-dark {
-            background: #222d32 !important;
-        }
-        .security-dark .sidebar {
-            background: #1a2226 !important;
-        }
     </style>
 </head>
-<body class="hold-transition skin-{{ $theme ?? 'blue' }} sidebar-mini {{ request()->is('admin/security*') ? 'security-dark' : '' }}">
+<body class="hold-transition skin-{{ $theme ?? 'blue' }} sidebar-mini">
 <div class="wrapper">
     <!-- Main Header -->
     <header class="main-header">
@@ -144,14 +138,13 @@ cat > resources/views/layouts/admin.blade.php << 'EOF'
                     </a>
                 </li>
                 
-                @if(auth()->check() && auth()->user()->id === 1)
-                    <li class="header">SECURITY</li>
-                    <li class="{{ request()->is('admin/security*') ? 'active' : '' }}">
-                        <a href="{{ route('admin.security') }}">
-                            <i class="fa fa-shield"></i> <span>Security Settings</span>
-                        </a>
-                    </li>
-                @endif
+                <!-- Security Menu -->
+                <li class="header">SECURITY</li>
+                <li class="{{ request()->is('admin/security*') ? 'active' : '' }}">
+                    <a href="{{ route('admin.security') }}">
+                        <i class="fa fa-shield"></i> <span>Security</span>
+                    </a>
+                </li>
             </ul>
         </section>
     </aside>
@@ -189,10 +182,10 @@ $(document).ready(function() {
 </body>
 </html>
 EOF
-echo "✅ Simple admin layout created"
+echo "✅ Admin layout created with Security menu"
 
-# 3. Buat routes yang benar-benar work
-echo "3. Creating working routes..."
+# 3. Buat routes admin yang baru
+echo "3. Creating admin routes..."
 cat > routes/admin.php << 'EOF'
 <?php
 
@@ -205,7 +198,7 @@ use Illuminate\Http\Request;
 |--------------------------------------------------------------------------
 */
 
-// Group middleware sudah diatur di RouteServiceProvider
+// Dashboard
 Route::get('/', function (Request $request) {
     try {
         $version = @file_get_contents(base_path('version')) ?: '1.0.0';
@@ -219,9 +212,7 @@ Route::get('/', function (Request $request) {
         $nodes = 0;
     }
     
-    // Set theme based on user
     $theme = 'blue';
-    
     return view('admin.index', compact('version', 'servers', 'users', 'nodes', 'theme'));
 })->name('admin.index');
 
@@ -267,32 +258,20 @@ Route::get('/nodes/new', function () {
 Route::prefix('security')->group(function () {
     // Security Dashboard
     Route::get('/', function () {
-        if (!auth()->check() || auth()->user()->id !== 1) {
-            abort(403, 'Only the owner can access security settings.');
-        }
-        
-        $theme = 'black';
+        $theme = 'blue';
         return view('admin.security.index', compact('theme'));
     })->name('admin.security');
     
     // Banned IPs
     Route::get('/banned-ips', function () {
-        if (!auth()->check() || auth()->user()->id !== 1) {
-            abort(403, 'Only the owner can access security settings.');
-        }
-        
-        $theme = 'black';
+        $theme = 'blue';
         $bannedIps = cache()->get('banned_ips', []);
         return view('admin.security.banned-ips', compact('theme', 'bannedIps'));
     })->name('admin.security.banned-ips');
     
     // Rate Limits
     Route::get('/rate-limits', function () {
-        if (!auth()->check() || auth()->user()->id !== 1) {
-            abort(403, 'Only the owner can access security settings.');
-        }
-        
-        $theme = 'black';
+        $theme = 'blue';
         $rateLimits = cache()->get('rate_limits', [
             'api' => ['enabled' => true, 'limit' => 60, 'window' => 60],
             'login' => ['enabled' => true, 'limit' => 5, 'window' => 300],
@@ -304,10 +283,6 @@ Route::prefix('security')->group(function () {
     
     // Actions
     Route::post('/ban-ip', function (Request $request) {
-        if (!auth()->check() || auth()->user()->id !== 1) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-        
         $request->validate([
             'ip_address' => 'required|ip'
         ]);
@@ -320,17 +295,13 @@ Route::prefix('security')->group(function () {
             'banned_by' => auth()->user()->name
         ];
         
-        cache()->put('banned_ips', $bannedIps, 86400 * 30); // 30 days
+        cache()->put('banned_ips', $bannedIps, 86400 * 30);
         
         return redirect()->route('admin.security.banned-ips')
             ->with('success', 'IP address has been banned successfully.');
     })->name('admin.security.ban-ip');
     
     Route::post('/toggle-rate-limit/{id}', function ($id) {
-        if (!auth()->check() || auth()->user()->id !== 1) {
-            return response()->json(['error' => 'Unauthorized'], 403);
-        }
-        
         $rateLimits = cache()->get('rate_limits', []);
         
         if (!isset($rateLimits[$id])) {
@@ -349,7 +320,7 @@ Route::prefix('security')->group(function () {
 EOF
 echo "✅ Routes created"
 
-# 4. Buat admin dashboard view
+# 4. Buat admin dashboard
 echo "4. Creating admin dashboard..."
 mkdir -p resources/views/admin
 
@@ -521,8 +492,8 @@ cat > resources/views/admin/index.blade.php << 'EOF'
 EOF
 echo "✅ Admin dashboard created"
 
-# 5. Buat security views dengan tema hitam
-echo "5. Creating security views with dark theme..."
+# 5. Buat security views dengan tema default Pterodactyl
+echo "5. Creating security views with default theme..."
 mkdir -p resources/views/admin/security
 
 # Security Dashboard
@@ -531,7 +502,7 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
 
 @section('content-header')
     <h1>
-        Security Dashboard
+        Security Settings
         <small>Security Management</small>
     </h1>
     <ol class="breadcrumb">
@@ -543,9 +514,9 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
 @section('content')
 <div class="row">
     <div class="col-md-12">
-        <div class="box box-solid bg-black">
+        <div class="box box-primary">
             <div class="box-header with-border">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-shield"></i> Security Overview</h3>
+                <h3 class="box-title"><i class="fa fa-shield"></i> Security Overview</h3>
             </div>
             <div class="box-body">
                 <div class="row">
@@ -604,9 +575,9 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
 
 <div class="row">
     <div class="col-md-6">
-        <div class="box box-solid bg-gray">
+        <div class="box box-default">
             <div class="box-header with-border">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-warning"></i> Quick Actions</h3>
+                <h3 class="box-title"><i class="fa fa-warning"></i> Quick Actions</h3>
             </div>
             <div class="box-body">
                 <div class="row">
@@ -639,9 +610,9 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
     </div>
     
     <div class="col-md-6">
-        <div class="box box-solid bg-gray">
+        <div class="box box-default">
             <div class="box-header with-border">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-history"></i> Recent Activity</h3>
+                <h3 class="box-title"><i class="fa fa-history"></i> Recent Activity</h3>
             </div>
             <div class="box-body">
                 <div class="alert alert-info">
@@ -660,15 +631,15 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
 
 <div class="row">
     <div class="col-md-12">
-        <div class="box box-solid bg-gray">
+        <div class="box box-default">
             <div class="box-header with-border">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-cog"></i> Security Configuration</h3>
+                <h3 class="box-title"><i class="fa fa-cog"></i> Security Configuration</h3>
             </div>
             <div class="box-body">
                 <div class="row">
                     <div class="col-md-4">
-                        <div class="small-box bg-dark">
-                            <div class="inner" style="color: white;">
+                        <div class="small-box bg-aqua">
+                            <div class="inner">
                                 <h4>Two-Factor Auth</h4>
                                 <p>Require 2FA for all admin users</p>
                             </div>
@@ -682,8 +653,8 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
                     </div>
                     
                     <div class="col-md-4">
-                        <div class="small-box bg-dark">
-                            <div class="inner" style="color: white;">
+                        <div class="small-box bg-green">
+                            <div class="inner">
                                 <h4>API Security</h4>
                                 <p>API key management and restrictions</p>
                             </div>
@@ -697,8 +668,8 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
                     </div>
                     
                     <div class="col-md-4">
-                        <div class="small-box bg-dark">
-                            <div class="inner" style="color: white;">
+                        <div class="small-box bg-yellow">
+                            <div class="inner">
                                 <h4>Audit Logs</h4>
                                 <p>View and manage system audit logs</p>
                             </div>
@@ -747,9 +718,9 @@ cat > resources/views/admin/security/banned-ips.blade.php << 'EOF'
 @section('content')
 <div class="row">
     <div class="col-md-12">
-        <div class="box box-solid bg-black">
+        <div class="box box-primary">
             <div class="box-header with-border">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-ban"></i> Banned IP Addresses</h3>
+                <h3 class="box-title"><i class="fa fa-ban"></i> Banned IP Addresses</h3>
                 <div class="box-tools">
                     <button class="btn btn-sm btn-danger" onclick="showBanModal()">
                         <i class="fa fa-plus"></i> Ban IP
@@ -766,7 +737,7 @@ cat > resources/views/admin/security/banned-ips.blade.php << 'EOF'
                 @endif
                 
                 <div class="table-responsive">
-                    <table class="table table-dark table-hover">
+                    <table class="table table-hover">
                         <thead>
                             <tr>
                                 <th>IP Address</th>
@@ -807,30 +778,30 @@ cat > resources/views/admin/security/banned-ips.blade.php << 'EOF'
 <!-- Ban IP Modal -->
 <div class="modal fade" id="banModal">
     <div class="modal-dialog">
-        <div class="modal-content bg-gray">
+        <div class="modal-content">
             <div class="modal-header">
                 <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true" style="color: white;">&times;</span>
+                    <span aria-hidden="true">&times;</span>
                 </button>
-                <h4 class="modal-title" style="color: white;"><i class="fa fa-ban"></i> Ban IP Address</h4>
+                <h4 class="modal-title"><i class="fa fa-ban"></i> Ban IP Address</h4>
             </div>
             <form action="{{ route('admin.security.ban-ip') }}" method="POST">
                 @csrf
                 <div class="modal-body">
                     <div class="form-group">
-                        <label style="color: white;">IP Address</label>
+                        <label>IP Address</label>
                         <input type="text" name="ip_address" class="form-control" 
                                placeholder="e.g., 192.168.1.100" required 
                                pattern="^(\d{1,3}\.){3}\d{1,3}$">
                         <small class="text-muted">Enter the IP address to ban</small>
                     </div>
                     <div class="form-group">
-                        <label style="color: white;">Reason (Optional)</label>
+                        <label>Reason (Optional)</label>
                         <textarea name="reason" class="form-control" rows="3" 
                                   placeholder="Why are you banning this IP?"></textarea>
                     </div>
                     <div class="form-group">
-                        <label style="color: white;">Duration</label>
+                        <label>Duration</label>
                         <select name="duration" class="form-control">
                             <option value="86400">24 Hours</option>
                             <option value="604800">7 Days</option>
@@ -881,30 +852,30 @@ cat > resources/views/admin/security/rate-limits.blade.php << 'EOF'
 @section('content')
 <div class="row">
     <div class="col-md-12">
-        <div class="box box-solid bg-black">
+        <div class="box box-primary">
             <div class="box-header with-border">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-tachometer"></i> Rate Limit Configuration</h3>
+                <h3 class="box-title"><i class="fa fa-tachometer"></i> Rate Limit Configuration</h3>
             </div>
             <div class="box-body">
-                <p class="text-light">Configure request rate limits to prevent abuse and ensure system stability.</p>
+                <p>Configure request rate limits to prevent abuse and ensure system stability.</p>
                 
                 <div class="row">
                     <div class="col-md-4">
-                        <div class="box box-solid bg-dark">
+                        <div class="box box-default">
                             <div class="box-header with-border">
-                                <h3 class="box-title" style="color: white;"><i class="fa fa-key"></i> API Rate Limit</h3>
+                                <h3 class="box-title"><i class="fa fa-key"></i> API Rate Limit</h3>
                             </div>
                             <div class="box-body">
                                 <div class="form-group">
-                                    <label style="color: white;">Enabled</label>
+                                    <label>Enabled</label>
                                     <div class="checkbox">
-                                        <label style="color: white;">
+                                        <label>
                                             <input type="checkbox" id="apiEnabled" checked> Enable API Rate Limiting
                                         </label>
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label style="color: white;">Requests per Minute</label>
+                                    <label>Requests per Minute</label>
                                     <input type="number" id="apiLimit" class="form-control" value="60" min="1" max="1000">
                                 </div>
                                 <button class="btn btn-warning btn-block" onclick="saveLimit('api')">
@@ -915,21 +886,21 @@ cat > resources/views/admin/security/rate-limits.blade.php << 'EOF'
                     </div>
                     
                     <div class="col-md-4">
-                        <div class="box box-solid bg-dark">
+                        <div class="box box-default">
                             <div class="box-header with-border">
-                                <h3 class="box-title" style="color: white;"><i class="fa fa-sign-in"></i> Login Rate Limit</h3>
+                                <h3 class="box-title"><i class="fa fa-sign-in"></i> Login Rate Limit</h3>
                             </div>
                             <div class="box-body">
                                 <div class="form-group">
-                                    <label style="color: white;">Enabled</label>
+                                    <label>Enabled</label>
                                     <div class="checkbox">
-                                        <label style="color: white;">
+                                        <label>
                                             <input type="checkbox" id="loginEnabled" checked> Enable Login Rate Limiting
                                         </label>
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label style="color: white;">Attempts per 5 Minutes</label>
+                                    <label>Attempts per 5 Minutes</label>
                                     <input type="number" id="loginLimit" class="form-control" value="5" min="1" max="50">
                                 </div>
                                 <button class="btn btn-warning btn-block" onclick="saveLimit('login')">
@@ -940,21 +911,21 @@ cat > resources/views/admin/security/rate-limits.blade.php << 'EOF'
                     </div>
                     
                     <div class="col-md-4">
-                        <div class="box box-solid bg-dark">
+                        <div class="box box-default">
                             <div class="box-header with-border">
-                                <h3 class="box-title" style="color: white;"><i class="fa fa-file"></i> File Operations Limit</h3>
+                                <h3 class="box-title"><i class="fa fa-file"></i> File Operations Limit</h3>
                             </div>
                             <div class="box-body">
                                 <div class="form-group">
-                                    <label style="color: white;">Enabled</label>
+                                    <label>Enabled</label>
                                     <div class="checkbox">
-                                        <label style="color: white;">
+                                        <label>
                                             <input type="checkbox" id="fileEnabled" checked> Enable File Rate Limiting
                                         </label>
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label style="color: white;">Operations per Minute</label>
+                                    <label>Operations per Minute</label>
                                     <input type="number" id="fileLimit" class="form-control" value="30" min="1" max="200">
                                 </div>
                                 <button class="btn btn-warning btn-block" onclick="saveLimit('files')">
@@ -967,9 +938,9 @@ cat > resources/views/admin/security/rate-limits.blade.php << 'EOF'
                 
                 <div class="row">
                     <div class="col-md-12">
-                        <div class="box box-solid bg-gray">
+                        <div class="box box-default">
                             <div class="box-header with-border">
-                                <h3 class="box-title" style="color: white;"><i class="fa fa-bolt"></i> Quick Actions</h3>
+                                <h3 class="box-title"><i class="fa fa-bolt"></i> Quick Actions</h3>
                             </div>
                             <div class="box-body">
                                 <button class="btn btn-success" onclick="enableAll()">
@@ -1028,7 +999,7 @@ function resetDefaults() {
 EOF
 echo "✅ Security views created"
 
-# 6. Buat simple placeholder views untuk halaman lain
+# 6. Buat placeholder views untuk halaman lain
 echo "6. Creating placeholder views..."
 for page in "servers/index" "users/index" "nodes/index" "settings" "servers/new" "users/new" "nodes/new"; do
     mkdir -p resources/views/admin/$(dirname $page)
@@ -1107,30 +1078,21 @@ systemctl restart "$PHP_SERVICE" 2>/dev/null || echo "⚠️  PHP-FPM restart fa
 # 10. Test
 echo "9. Testing installation..."
 echo ""
-echo "=== TESTING ROUTES ==="
-
-# List routes untuk memastikan
-echo "Listing registered admin routes:"
-sudo -u www-data php artisan route:list 2>/dev/null | grep -E "(admin|security)" || echo "Routes not compiled"
-
+echo "=== ADMIN PANEL READY ==="
+echo "Admin Panel URL: http://your-domain.com/admin"
+echo "Security Page: http://your-domain.com/admin/security"
+echo "Banned IPs: http://your-domain.com/admin/security/banned-ips"
+echo "Rate Limits: http://your-domain.com/admin/security/rate-limits"
 echo ""
-echo "=== MANUAL TESTING ==="
-echo "1. Access the admin panel: http://your-domain.com/admin"
-echo "2. Login with your admin account"
-echo "3. Check the dashboard"
-echo "4. Navigate to Security: http://your-domain.com/admin/security"
-echo "5. Test banned IPs page: http://your-domain.com/admin/security/banned-ips"
-echo "6. Test rate limits page: http://your-domain.com/admin/security/rate-limits"
-echo ""
-echo "=== FEATURES AVAILABLE ==="
-echo "✅ Complete admin panel layout"
-echo "✅ Dark theme for security pages (no emoji, uses icons)"
-echo "✅ IP ban management system"
-echo "✅ Rate limit configuration"
-echo "✅ Owner-only access for security (user ID 1)"
+echo "=== FEATURES ==="
+echo "✅ Admin panel sebagai default"
+echo "✅ Menu Security dengan icon tamen (fa-shield)"
+echo "✅ Tema default Pterodactyl (blue)"
+echo "✅ Tidak ada emoji - semua icon FontAwesome"
+echo "✅ Security pages: Dashboard, Banned IPs, Rate Limits"
 echo "✅ Responsive design"
-echo "✅ Proper navigation and sidebar"
+echo "✅ Integrated dengan layout admin"
 echo ""
-echo "================================================="
-echo "PTERODACTYL ADMIN PANEL & SECURITY SYSTEM READY!"
-echo "================================================="
+echo "================================================"
+echo "PTERODACTYL ADMIN PANEL READY WITH SECURITY MENU"
+echo "================================================"
