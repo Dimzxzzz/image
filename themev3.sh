@@ -114,6 +114,7 @@ cd $PTERO_PATH
 php artisan view:clear
 php artisan cache:clear
 yarn install --ignore-engines
-yarn build:production --ignore-engines
+yarn run clean
+cross-env NODE_ENV=production ./node_modules/.bin/webpack --mode production
 
 echo "--- SELESAI! SILAKAN REFRESH BROWSER (CTRL+F5) ---"
