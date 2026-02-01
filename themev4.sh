@@ -6,7 +6,7 @@ CSS_FILE="$PTERO_PATH/resources/scripts/index.css"
 
 echo "--- Memperbaiki & Menginstall VaxStresser Theme ---"
 
-# 1. Inject CSS (Deep Dark)
+# 1. Inject CSS (Deep Dark) - Sesuai referensi gambar
 cat << 'EOF' > $CSS_FILE
 @tailwind base;
 @tailwind components;
@@ -38,7 +38,7 @@ aside {
 }
 EOF
 
-# 2. Inject Dashboard Code (Full & Fixed)
+# 2. Inject Dashboard Code (Full & Fixed) - Implementasi Role Admin/User
 cat << 'EOF' > $DASHBOARD_FILE
 import React, { useEffect, useState } from 'react';
 import { Server } from '@/api/server/getServer';
@@ -109,12 +109,18 @@ export default () => {
 };
 EOF
 
-# 3. Build Ulang
+# 3. Build Ulang dengan npx (Cara paling aman)
 cd $PTERO_PATH
 php artisan view:clear
 php artisan cache:clear
+
+echo "Menjalankan Yarn Install..."
 yarn install --ignore-engines
+
+echo "Membersihkan asset lama..."
 yarn run clean
-cross-env NODE_ENV=production ./node_modules/.bin/webpack --mode production
+
+echo "Memulai Webpack Build (Tunggu sampai selesai)..."
+npx cross-env NODE_ENV=production ./node_modules/.bin/webpack --mode production
 
 echo "--- SELESAI! SILAKAN REFRESH BROWSER (CTRL+F5) ---"
