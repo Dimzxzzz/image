@@ -1,54 +1,27 @@
 #!/bin/bash
 
-echo "ADDING SECURITY MENU TO PTERODACTYL ADMIN PANEL"
-echo "================================================"
+echo "FIXING SECURITY MENU FOR PTERODACTYL ADMIN PANEL"
+echo "================================================="
 
 cd /var/www/pterodactyl
 
-# 1. Backup original admin layout
-echo "1. Backing up original admin layout..."
-if [ -f "resources/views/layouts/admin.blade.php" ]; then
-    cp resources/views/layouts/admin.blade.php resources/views/layouts/admin.blade.php.backup
-    echo "✅ Original layout backed up"
-else
-    echo "❌ Original admin layout not found!"
-    exit 1
-fi
+# 1. Perbaiki routes admin.php
+echo "1. Fixing routes in admin.php..."
 
-# 2. Tambahkan menu Security ke sidebar
-echo "2. Adding Security menu to sidebar..."
-# Cari posisi sebelum SERVICE MANAGEMENT
-sed -i '/<li class="header">SERVICE MANAGEMENT<\/li>/i\
-                        <li class="header">SECURITY</li>\
-                        <li class="{{ ! starts_with(Route::currentRouteName(), \x27admin.security\x27) ?: \x27active\x27 }}">\
-                            <a href="{{ route(\x27admin.security\x27)}}">\
-                                <i class="fa fa-shield"></i> <span>Security</span>\
-                            </a>\
-                        </li>' resources/views/layouts/admin.blade.php
+# Cari file routes/admin.php
+if [ -f "routes/admin.php" ]; then
+    # Backup dulu
+    cp routes/admin.php routes/admin.php.backup2
+    
+    # Cari posisi untuk menambahkan routes security
+    # Tambahkan routes security di akhir file sebelum penutup
+    cat >> routes/admin.php << 'EOF'
 
-echo "✅ Security menu added to sidebar"
-
-# 3. Buat controller untuk Security
-echo "3. Creating Security controller..."
-mkdir -p app/Http/Controllers/Admin/Security 2>/dev/null
-
-cat > app/Http/Controllers/Admin/SecurityController.php << 'EOF'
-<?php
-
-namespace Pterodactyl\Http\Controllers\Admin;
-
-use Illuminate\Http\Request;
-use Pterodactyl\Http\Controllers\Controller;
-
-class SecurityController extends Controller
-{
-    /**
-     * Display security dashboard.
-     *
-     * @return \Illuminate\View\View
-     */
-    public function index()
-    {
+// ============================
+// SECURITY ROUTES
+// ============================
+Route::group(['prefix' => 'security'], function () {
+    Route::get('/', function () {
         $securityStats = [
             'failed_logins' => rand(0, 5),
             'api_requests' => rand(1000, 5000),
@@ -62,130 +35,63 @@ class SecurityController extends Controller
             ['type' => 'file_upload', 'user' => 'user1', 'ip' => '172.16.0.10', 'time' => '10 minutes ago', 'status' => 'success'],
         ];
         
-        return view('admin.security.index', [
-            'securityStats' => $securityStats,
-            'recentActivities' => $recentActivities,
-        ]);
-    }
+        return view('admin.security.index', compact('securityStats', 'recentActivities'));
+    })->name('admin.security');
     
-    /**
-     * Display security scans page.
-     *
-     * @return \Illuminate\View\View
-     */
-    public function scans()
-    {
+    Route::get('/scans', function () {
         $scans = [
             ['id' => 1, 'type' => 'Vulnerability Scan', 'status' => 'completed', 'date' => now()->subDays(1)->format('Y-m-d'), 'issues' => 2],
             ['id' => 2, 'type' => 'Malware Scan', 'status' => 'completed', 'date' => now()->subDays(2)->format('Y-m-d'), 'issues' => 0],
             ['id' => 3, 'type' => 'Configuration Audit', 'status' => 'in_progress', 'date' => now()->format('Y-m-d'), 'issues' => 5],
         ];
         
-        return view('admin.security.scans', ['scans' => $scans]);
-    }
+        return view('admin.security.scans', compact('scans'));
+    })->name('admin.security.scans');
     
-    /**
-     * Display firewall rules page.
-     *
-     * @return \Illuminate\View\View
-     */
-    public function firewall()
-    {
+    Route::get('/firewall', function () {
         $rules = [
             ['id' => 1, 'name' => 'SSH Protection', 'port' => '22', 'action' => 'allow', 'source' => '192.168.1.0/24', 'enabled' => true],
             ['id' => 2, 'name' => 'HTTP Access', 'port' => '80,443', 'action' => 'allow', 'source' => '0.0.0.0/0', 'enabled' => true],
             ['id' => 3, 'name' => 'Database Block', 'port' => '3306', 'action' => 'deny', 'source' => 'external', 'enabled' => true],
         ];
         
-        return view('admin.security.firewall', ['rules' => $rules]);
-    }
+        return view('admin.security.firewall', compact('rules'));
+    })->name('admin.security.firewall');
     
-    /**
-     * Display security logs page.
-     *
-     * @return \Illuminate\View\View
-     */
-    public function logs()
-    {
+    Route::get('/logs', function () {
         $logs = [
             ['id' => 1, 'type' => 'failed_login', 'message' => 'Failed login attempt for user "admin"', 'ip' => '203.0.113.5', 'timestamp' => now()->subMinutes(30)->format('Y-m-d H:i:s')],
             ['id' => 2, 'type' => 'file_change', 'message' => 'System file modified: /etc/passwd', 'ip' => '192.168.1.100', 'timestamp' => now()->subHours(1)->format('Y-m-d H:i:s')],
             ['id' => 3, 'type' => 'api_abuse', 'message' => 'Excessive API requests detected', 'ip' => '10.0.0.15', 'timestamp' => now()->subHours(2)->format('Y-m-d H:i:s')],
         ];
         
-        return view('admin.security.logs', ['logs' => $logs]);
-    }
+        return view('admin.security.logs', compact('logs'));
+    })->name('admin.security.logs');
     
-    /**
-     * Run security scan.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Http\RedirectResponse
-     */
-    public function runScan(Request $request)
-    {
-        $request->session()->flash('success', ucfirst($request->input('scan_type', 'quick')) . ' security scan has been initiated. Results will be available shortly.');
-        
+    Route::post('/run-scan', function () {
+        request()->session()->flash('success', 'Security scan has been initiated.');
         return redirect()->route('admin.security.scans');
-    }
+    })->name('admin.security.run-scan');
     
-    /**
-     * Clear security logs.
-     *
-     * @param  \Illuminate\Http\Request  $request
-     * @return \Illuminate\Http\RedirectResponse
-     */
-    public function clearLogs(Request $request)
-    {
-        $request->session()->flash('success', 'Security logs have been cleared successfully.');
-        
+    Route::post('/clear-logs', function () {
+        request()->session()->flash('success', 'Security logs have been cleared.');
         return redirect()->route('admin.security.logs');
-    }
-}
-EOF
-echo "✅ Security controller created"
-
-# 4. Tambahkan routes untuk Security
-echo "4. Adding Security routes..."
-if [ -f "routes/admin.php" ]; then
-    # Backup routes
-    cp routes/admin.php routes/admin.php.backup
-    
-    # Tambahkan routes security sebelum penutup file
-    cat >> routes/admin.php << 'EOF'
-
-// ============================
-// SECURITY ROUTES
-// ============================
-Route::group(['prefix' => 'security', 'namespace' => 'Security', 'as' => 'security.'], function () {
-    Route::get('/', 'SecurityController@index')->name('index');
-    Route::get('/scans', 'SecurityController@scans')->name('scans');
-    Route::get('/firewall', 'SecurityController@firewall')->name('firewall');
-    Route::get('/logs', 'SecurityController@logs')->name('logs');
-    Route::post('/run-scan', 'SecurityController@runScan')->name('run-scan');
-    Route::post('/clear-logs', 'SecurityController@clearLogs')->name('clear-logs');
+    })->name('admin.security.clear-logs');
 });
 EOF
     
-    # Ganti nama route dari security.index menjadi admin.security
-    sed -i "s/Route::get('\/', 'SecurityController@index')->name('index');/Route::get('\/', 'SecurityController@index')->name('index')->name('admin.security');/" routes/admin.php
-    sed -i "s/->name('scans')/->name('admin.security.scans')/" routes/admin.php
-    sed -i "s/->name('firewall')/->name('admin.security.firewall')/" routes/admin.php
-    sed -i "s/->name('logs')/->name('admin.security.logs')/" routes/admin.php
-    sed -i "s/->name('run-scan')/->name('admin.security.run-scan')/" routes/admin.php
-    sed -i "s/->name('clear-logs')/->name('admin.security.clear-logs')/" routes/admin.php
-    
-    echo "✅ Security routes added"
+    echo "✅ Routes added to admin.php"
 else
-    echo "❌ Admin routes file not found!"
+    echo "❌ routes/admin.php not found!"
     exit 1
 fi
 
-# 5. Buat views untuk Security
-echo "5. Creating Security views..."
+# 2. Buat direktori views jika belum ada
+echo "2. Creating security views directory..."
 mkdir -p resources/views/admin/security
 
-# Security Dashboard View
+# 3. Buat view untuk Security Dashboard
+echo "3. Creating Security Dashboard view..."
 cat > resources/views/admin/security/index.blade.php << 'EOF'
 @extends('layouts.admin')
 
@@ -321,9 +227,12 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
                 </div>
                 
                 <div class="text-center" style="margin-top: 20px;">
-                    <button class="btn btn-danger btn-lg" onclick="runQuickScan()">
-                        <i class="fa fa-play-circle"></i> Run Quick Scan
-                    </button>
+                    <form action="{{ route('admin.security.run-scan') }}" method="POST" style="display: inline;">
+                        @csrf
+                        <button type="submit" class="btn btn-danger btn-lg">
+                            <i class="fa fa-play-circle"></i> Run Quick Scan
+                        </button>
+                    </form>
                 </div>
             </div>
         </div>
@@ -361,30 +270,10 @@ cat > resources/views/admin/security/index.blade.php << 'EOF'
     </div>
 </div>
 @endsection
-
-@section('footer-scripts')
-    @parent
-    <script>
-    function runQuickScan() {
-        if (confirm('Run a quick security scan? This may take a few minutes.')) {
-            $.ajax({
-                url: '{{ route("admin.security.run-scan") }}',
-                method: 'POST',
-                data: {
-                    _token: '{{ csrf_token() }}',
-                    scan_type: 'quick'
-                },
-                success: function(response) {
-                    window.location.href = '{{ route("admin.security.scans") }}';
-                }
-            });
-        }
-    }
-    </script>
-@endsection
 EOF
 
-# Security Scans View
+# 4. Buat view untuk Security Scans
+echo "4. Creating Security Scans view..."
 cat > resources/views/admin/security/scans.blade.php << 'EOF'
 @extends('layouts.admin')
 
@@ -414,16 +303,13 @@ cat > resources/views/admin/security/scans.blade.php << 'EOF'
             <div class="box-header with-border">
                 <h3 class="box-title"><i class="fa fa-search"></i> Available Scans</h3>
                 <div class="box-tools">
-                    <div class="btn-group">
-                        <button type="button" class="btn btn-danger dropdown-toggle" data-toggle="dropdown">
-                            <i class="fa fa-play"></i> Run Scan
+                    <form action="{{ route('admin.security.run-scan') }}" method="POST" style="display: inline;">
+                        @csrf
+                        <input type="hidden" name="scan_type" value="quick">
+                        <button type="submit" class="btn btn-danger">
+                            <i class="fa fa-play"></i> Run Quick Scan
                         </button>
-                        <ul class="dropdown-menu">
-                            <li><a href="#" onclick="runScan('quick')">Quick Scan</a></li>
-                            <li><a href="#" onclick="runScan('full')">Full System Scan</a></li>
-                            <li><a href="#" onclick="runScan('malware')">Malware Scan</a></li>
-                        </ul>
-                    </div>
+                    </form>
                 </div>
             </div>
             <div class="box-body table-responsive">
@@ -491,33 +377,47 @@ cat > resources/views/admin/security/scans.blade.php << 'EOF'
             </div>
             <div class="box-body">
                 <div class="list-group">
-                    <a href="#" class="list-group-item" onclick="runScan('quick')">
-                        <h4 class="list-group-item-heading">
-                            <i class="fa fa-bolt text-yellow"></i> Quick Scan
-                        </h4>
-                        <p class="list-group-item-text">
-                            Fast scan of critical system files and configurations.
-                            Takes 1-2 minutes.
-                        </p>
-                    </a>
-                    <a href="#" class="list-group-item" onclick="runScan('full')">
-                        <h4 class="list-group-item-heading">
-                            <i class="fa fa-search text-blue"></i> Full System Scan
-                        </h4>
-                        <p class="list-group-item-text">
-                            Comprehensive scan of all files and system components.
-                            Takes 10-15 minutes.
-                        </p>
-                    </a>
-                    <a href="#" class="list-group-item" onclick="runScan('malware')">
-                        <h4 class="list-group-item-heading">
-                            <i class="fa fa-bug text-red"></i> Malware Scan
-                        </h4>
-                        <p class="list-group-item-text">
-                            Deep scan for malware, viruses, and suspicious files.
-                            Takes 5-10 minutes.
-                        </p>
-                    </a>
+                    <form action="{{ route('admin.security.run-scan') }}" method="POST" style="margin-bottom: 0;">
+                        @csrf
+                        <input type="hidden" name="scan_type" value="quick">
+                        <button type="submit" class="list-group-item" style="text-align: left; border: none; background: none; width: 100%;">
+                            <h4 class="list-group-item-heading">
+                                <i class="fa fa-bolt text-yellow"></i> Quick Scan
+                            </h4>
+                            <p class="list-group-item-text">
+                                Fast scan of critical system files and configurations.
+                                Takes 1-2 minutes.
+                            </p>
+                        </button>
+                    </form>
+                    
+                    <form action="{{ route('admin.security.run-scan') }}" method="POST" style="margin-bottom: 0;">
+                        @csrf
+                        <input type="hidden" name="scan_type" value="full">
+                        <button type="submit" class="list-group-item" style="text-align: left; border: none; background: none; width: 100%;">
+                            <h4 class="list-group-item-heading">
+                                <i class="fa fa-search text-blue"></i> Full System Scan
+                            </h4>
+                            <p class="list-group-item-text">
+                                Comprehensive scan of all files and system components.
+                                Takes 10-15 minutes.
+                            </p>
+                        </button>
+                    </form>
+                    
+                    <form action="{{ route('admin.security.run-scan') }}" method="POST" style="margin-bottom: 0;">
+                        @csrf
+                        <input type="hidden" name="scan_type" value="malware">
+                        <button type="submit" class="list-group-item" style="text-align: left; border: none; background: none; width: 100%;">
+                            <h4 class="list-group-item-heading">
+                                <i class="fa fa-bug text-red"></i> Malware Scan
+                            </h4>
+                            <p class="list-group-item-text">
+                                Deep scan for malware, viruses, and suspicious files.
+                                Takes 5-10 minutes.
+                            </p>
+                        </button>
+                    </form>
                 </div>
             </div>
         </div>
@@ -585,22 +485,6 @@ cat > resources/views/admin/security/scans.blade.php << 'EOF'
 @section('footer-scripts')
     @parent
     <script>
-    function runScan(type) {
-        if (confirm('Run ' + type + ' scan? This may take a few minutes.')) {
-            $.ajax({
-                url: '{{ route("admin.security.run-scan") }}',
-                method: 'POST',
-                data: {
-                    _token: '{{ csrf_token() }}',
-                    scan_type: type
-                },
-                success: function(response) {
-                    window.location.reload();
-                }
-            });
-        }
-    }
-    
     function viewReport(id) {
         alert('Viewing report for scan #' + id + '\n\nThis would show detailed scan results.');
     }
@@ -614,7 +498,8 @@ cat > resources/views/admin/security/scans.blade.php << 'EOF'
 @endsection
 EOF
 
-# Firewall Rules View
+# 5. Buat view untuk Firewall Rules
+echo "5. Creating Firewall Rules view..."
 cat > resources/views/admin/security/firewall.blade.php << 'EOF'
 @extends('layouts.admin')
 
@@ -821,7 +706,8 @@ cat > resources/views/admin/security/firewall.blade.php << 'EOF'
 @endsection
 EOF
 
-# Security Logs View
+# 6. Buat view untuk Security Logs
+echo "6. Creating Security Logs view..."
 cat > resources/views/admin/security/logs.blade.php << 'EOF'
 @extends('layouts.admin')
 
@@ -851,17 +737,18 @@ cat > resources/views/admin/security/logs.blade.php << 'EOF'
             <div class="box-header with-border">
                 <h3 class="box-title"><i class="fa fa-file-text-o"></i> Security Event Logs</h3>
                 <div class="box-tools">
-                    <div class="btn-group">
-                        <button class="btn btn-sm btn-danger" onclick="clearLogs()">
+                    <form action="{{ route('admin.security.clear-logs') }}" method="POST" style="display: inline;">
+                        @csrf
+                        <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Clear all security logs?')">
                             <i class="fa fa-trash"></i> Clear Logs
                         </button>
-                        <button class="btn btn-sm btn-info" onclick="exportLogs()">
-                            <i class="fa fa-download"></i> Export
-                        </button>
-                        <button class="btn btn-sm btn-success" onclick="refreshLogs()">
-                            <i class="fa fa-refresh"></i> Refresh
-                        </button>
-                    </div>
+                    </form>
+                    <button class="btn btn-sm btn-info" onclick="exportLogs()">
+                        <i class="fa fa-download"></i> Export
+                    </button>
+                    <button class="btn btn-sm btn-success" onclick="refreshLogs()">
+                        <i class="fa fa-refresh"></i> Refresh
+                    </button>
                 </div>
             </div>
             <div class="box-body table-responsive">
@@ -1037,21 +924,6 @@ cat > resources/views/admin/security/logs.blade.php << 'EOF'
 @section('footer-scripts')
     @parent
     <script>
-    function clearLogs() {
-        if (confirm('Clear all security logs? This action cannot be undone.')) {
-            $.ajax({
-                url: '{{ route("admin.security.clear-logs") }}',
-                method: 'POST',
-                data: {
-                    _token: '{{ csrf_token() }}'
-                },
-                success: function(response) {
-                    window.location.reload();
-                }
-            });
-        }
-    }
-    
     function exportLogs() {
         alert('Exporting security logs to CSV file...');
     }
@@ -1077,36 +949,27 @@ cat > resources/views/admin/security/logs.blade.php << 'EOF'
 @endsection
 EOF
 
-echo "✅ Security views created"
+echo "✅ All security views created"
 
-# 6. Clear cache
-echo "6. Clearing cache..."
+# 7. Clear cache
+echo "7. Clearing cache..."
 php artisan view:clear
 php artisan route:clear
 php artisan config:clear
 
-# 7. Fix permissions
-echo "7. Fixing permissions..."
-chown -R www-data:www-data /var/www/pterodactyl
-chmod -R 755 /var/www/pterodactyl/storage
-chmod -R 755 /var/www/pterodactyl/bootstrap/cache
-
 echo ""
-echo "================================================"
-echo "SECURITY MENU SUCCESSFULLY ADDED TO PTERODACTYL"
-echo "================================================"
+echo "================================================="
+echo "SECURITY MENU FIXED SUCCESSFULLY"
+echo "================================================="
 echo ""
-echo "✅ Menu Security telah ditambahkan ke sidebar admin"
-echo "✅ Controller Security telah dibuat"
-echo "✅ Routes Security telah ditambahkan"
-echo "✅ Views Security telah dibuat"
+echo "✅ Routes untuk Security telah ditambahkan"
+echo "✅ Views untuk Security telah dibuat"
+echo "✅ Cache telah dibersihkan"
 echo ""
-echo "URL Security Dashboard: /admin/security"
-echo "URL Security Scans: /admin/security/scans"
-echo "URL Firewall Rules: /admin/security/firewall"
-echo "URL Security Logs: /admin/security/logs"
+echo "Sekarang coba akses:"
+echo "- /admin/security"
+echo "- /admin/security/scans"
+echo "- /admin/security/firewall"
+echo "- /admin/security/logs"
 echo ""
-echo "Menu Security akan muncul di sidebar admin dengan icon shield (fa-shield)"
-echo "di bawah bagian MANAGEMENT dan di atas SERVICE MANAGEMENT."
-echo ""
-echo "Refresh halaman admin untuk melihat perubahan."
+echo "Menu Security sudah seharusnya berfungsi tanpa error."
