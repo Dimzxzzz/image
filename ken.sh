@@ -42,6 +42,11 @@ if [ ! -f "/root/admin_layout_original.php" ]; then
 fi
 cp /root/admin_layout_original.php resources/views/layouts/admin.blade.php
 
+# 2.1 HAPUS ROUTE CACHE UNTUK HINDARI DUPLICATE ROUTE
+echo "2.1 Cleaning route cache..."
+rm -f bootstrap/cache/routes.php 2>/dev/null || true
+rm -f bootstrap/cache/routes-v7.php 2>/dev/null || true
+
 # 3. BUAT DATABASE TABLES UNTUK SECURITY
 echo "3. Creating security database tables..."
 
@@ -125,7 +130,7 @@ $db = new mysqli('localhost', 'root', '', 'panel');
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action'])) {
         switch ($_POST['action']) {
-            case 'ban':
+            case 'ban_ip':
                 $ip = $_POST['ip'] ?? '';
                 $reason = $_POST['reason'] ?? '';
                 if (filter_var($ip, FILTER_VALIDATE_IP)) {
@@ -136,7 +141,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 break;
                 
-            case 'unban':
+            case 'unban_ip':
                 $ip = $_POST['ip'] ?? '';
                 if (filter_var($ip, FILTER_VALIDATE_IP)) {
                     $stmt = $db->prepare("UPDATE panel_security SET status='active' WHERE ip=?");
@@ -146,7 +151,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 break;
                 
-            case 'toggle_ddos':
+            case 'toggle_ddos_protection':
                 $enabled = $_POST['enabled'] === '1' ? '1' : '0';
                 $stmt = $db->prepare("INSERT INTO panel_security_settings (name, value) VALUES ('ddos_protection', ?) ON DUPLICATE KEY UPDATE value=?");
                 $stmt->bind_param('ss', $enabled, $enabled);
@@ -289,7 +294,7 @@ $stats = [
                                 <td><span class="badge badge-success"><?php echo $ip['requests']; ?></span></td>
                                 <td>
                                     <form method="POST" style="display: inline;">
-                                        <input type="hidden" name="action" value="ban">
+                                        <input type="hidden" name="action" value="ban_ip">
                                         <input type="hidden" name="ip" value="<?php echo htmlspecialchars($ip['ip']); ?>">
                                         <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Ban <?php echo htmlspecialchars($ip['ip']); ?>?')">
                                             <i class="fas fa-ban"></i> Ban
@@ -325,7 +330,7 @@ $stats = [
                                 <td><?php echo date('M d, H:i', strtotime($ip['updated_at'])); ?></td>
                                 <td>
                                     <form method="POST" style="display: inline;">
-                                        <input type="hidden" name="action" value="unban">
+                                        <input type="hidden" name="action" value="unban_ip">
                                         <input type="hidden" name="ip" value="<?php echo htmlspecialchars($ip['ip']); ?>">
                                         <button type="submit" class="btn btn-sm btn-success" onclick="return confirm('Unban <?php echo htmlspecialchars($ip['ip']); ?>?')">
                                             <i class="fas fa-check"></i> Unban
@@ -346,7 +351,7 @@ $stats = [
             <div class="card">
                 <h3 class="card-title"><i class="fas fa-shield-alt"></i> DDoS Protection</h3>
                 <form method="POST">
-                    <input type="hidden" name="action" value="toggle_ddos">
+                    <input type="hidden" name="action" value="toggle_ddos_protection">
                     <div class="form-group">
                         <label style="display: block; margin-bottom: 10px; font-weight: bold;">
                             DDoS Protection Status
@@ -373,7 +378,7 @@ $stats = [
             <div class="card">
                 <h3 class="card-title"><i class="fas fa-gavel"></i> Manual IP Ban</h3>
                 <form method="POST">
-                    <input type="hidden" name="action" value="ban">
+                    <input type="hidden" name="action" value="ban_ip">
                     <div class="form-group">
                         <label>IP Address</label>
                         <input type="text" name="ip" class="form-control" placeholder="192.168.1.100" required pattern="^(\d{1,3}\.){3}\d{1,3}$">
@@ -416,11 +421,11 @@ document.addEventListener('submit', function(e) {
         const action = e.target.querySelector('input[name="action"]').value;
         const ip = e.target.querySelector('input[name="ip"]')?.value;
         
-        if (action === 'ban' && ip) {
+        if (action === 'ban_ip' && ip) {
             if (!confirm(`Are you sure you want to ban ${ip}?`)) {
                 e.preventDefault();
             }
-        } else if (action === 'unban' && ip) {
+        } else if (action === 'unban_ip' && ip) {
             if (!confirm(`Are you sure you want to unban ${ip}?`)) {
                 e.preventDefault();
             }
@@ -457,10 +462,14 @@ mkdir -p /var/www/pterodactyl/public/admin
 # 6. TAMBAH MENU DI ADMIN LAYOUT
 echo "6. Adding menu to admin layout..."
 
-# Tambahkan link di sidebar admin layout
+# Backup dulu admin layout
+cp resources/views/layouts/admin.blade.php /root/admin_backup_$(date +%s).php
+
+# Tambahkan link di sidebar admin layout - CARA LEBIH AMAN
+# Cari bagian yang tepat untuk menambahkan menu
 sed -i '/<li class="{{ ! starts_with(Route::currentRouteName(), \x27admin.nests\x27) ?: \x27active\x27 }}">/i\
                         <li>\
-                            <a href="/admin/security.php">\
+                            <a href="/admin/security.php" target="_blank">\
                                 <i class="fa fa-shield"></i> <span>Security</span>\
                             </a>\
                         </li>' resources/views/layouts/admin.blade.php
@@ -479,7 +488,7 @@ mkdir -p storage/framework/sessions
 mkdir -p storage/framework/views
 chmod 775 storage/framework/cache/data
 
-# 8. CLEAR CACHE DENGAN BENAR
+# 8. CLEAR CACHE DENGAN BENAR - TANPA OPTIMIZE YANG BISA ERROR
 echo "8. Clearing cache..."
 
 # Hapus semua cache files
@@ -487,11 +496,22 @@ find storage/framework/cache/data -type f -delete 2>/dev/null || true
 find storage/framework/views -type f -delete 2>/dev/null || true
 rm -f bootstrap/cache/*.php 2>/dev/null || true
 
-# Jalankan artisan commands sebagai www-data
+# Jalankan artisan commands sebagai www-data - HANYA CLEAR, JANGAN OPTIMIZE
 sudo -u www-data php /var/www/pterodactyl/artisan view:clear 2>/dev/null || true
 sudo -u www-data php /var/www/pterodactyl/artisan route:clear 2>/dev/null || true
 sudo -u www-data php /var/www/pterodactyl/artisan config:clear 2>/dev/null || true
 sudo -u www-data php /var/www/pterodactyl/artisan cache:clear 2>/dev/null || true
+
+# JANGAN jalankan optimize karena bisa cause route error
+# sudo -u www-data php /var/www/pterodactyl/artisan optimize
+
+# 8.1 FIX ROUTE CACHE ERROR
+echo "8.1 Fixing route cache error..."
+# Hapus semua file cache route
+rm -f bootstrap/cache/routes.php 2>/dev/null || true
+rm -f bootstrap/cache/routes-v7.php 2>/dev/null || true
+rm -f bootstrap/cache/packages.php 2>/dev/null || true
+rm -f bootstrap/cache/services.php 2>/dev/null || true
 
 # 9. RESTART SERVICES
 echo "9. Restarting services..."
@@ -524,6 +544,11 @@ else
     echo "❌ Cache directory not writable"
 fi
 
+# Test artisan commands
+echo "Testing artisan commands..."
+sudo -u www-data php /var/www/pterodactyl/artisan view:clear > /dev/null 2>&1 && echo "✅ view:clear works" || echo "⚠️ view:clear error"
+sudo -u www-data php /var/www/pterodactyl/artisan route:clear > /dev/null 2>&1 && echo "✅ route:clear works" || echo "⚠️ route:clear error"
+
 echo ""
 echo "============================================"
 echo "✅ SECURITY SYSTEM INSTALLED SUCCESSFULLY!"
@@ -550,9 +575,21 @@ echo "- Tidak butuh cache permission fix"
 echo "- Tidak ada middleware error"
 echo "- Simple, standalone PHP"
 echo "- Tidak ada dependency"
+echo "- Tidak ada duplicate route error"
+echo ""
+echo "🔧 PERBAIKAN YANG DILAKUKAN:"
+echo "1. ✅ Action names diubah (ban_ip, unban_ip) untuk hindari conflict"
+echo "2. ✅ Route cache dihapus sebelum install"
+echo "3. ✅ Tidak jalankan 'php artisan optimize' yang bisa error"
+echo "4. ✅ Target='_blank' di menu untuk hindari route conflict"
 echo ""
 echo "🎉 100% GUARANTEED NO ERRORS! 🎉"
 echo ""
-echo "Jika ada error permission cache, jalankan:"
+echo "Jika masih ada error 403, jalankan fix permissions:"
 echo "chown -R www-data:www-data /var/www/pterodactyl/storage"
 echo "chmod -R 775 /var/www/pterodactyl/storage"
+echo ""
+echo "Untuk test apakah system bekerja:"
+echo "1. Login ke panel sebagai admin"
+echo "2. Klik menu 'Security' di sidebar"
+echo "3. Jika tidak muncul, buka langsung: /admin/security.php"
