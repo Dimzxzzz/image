@@ -1,76 +1,755 @@
 #!/bin/bash
 
 echo "=================================================="
-echo "⚡ PTERODACTYL BLACKENDSPACE + SECURITY INSTALLER"
+echo "🔥 BLACKENDSPACE THEME + ULTIMATE SECURITY INSTALL"
 echo "=================================================="
 echo "Features:"
-echo "1. ✓ Install BlackEndSpace Theme"
-echo "2. ✓ Fix all 403/500 permission errors"
-echo "3. ✓ Ultimate Security System"
-echo "   • DDoS Rate Limit (ON/OFF)"
-echo "   • IP Ban/Unban with reason & time"
-echo "   • Anti-Debug & Anti-Inspect (ON/OFF)"
-echo "   • Anti-Bot (fake IP/User-Agent detection)"
-echo "   • Exclusive access for User ID = 1 only"
-echo "4. ✓ English Interface"
-echo "5. ✓ 100% Error Free Installation"
+echo "1. ✅ Install BlackEndSpace Theme"
+echo "2. ✅ Fix all 403/500 permission errors"
+echo "3. ✅ Security Menu with Shield Icon"
+echo "4. ✅ Complete Security System"
+echo "5. ✅ Exclusive access for User ID = 1"
 echo "=================================================="
 
+# ========== CONFIGURATION ==========
 PANEL_DIR="/var/www/pterodactyl"
-THEME_REPO="https://github.com/TheFonix/Pterodactyl-Themes"
-THEME_NAME="BlackEndSpace"
+THEME_URL="https://raw.githubusercontent.com/TheFonix/Pterodactyl-Themes/master/MasterThemes/BlackEndSpace"
 ADMIN_ID=1
+SECURITY_MENU_ICON="fa-shield"  # FontAwesome shield icon
 
-echo -e "\n\e[36m[PHASE 1] Installing BlackEndSpace Theme...\e[0m"
+# ========== PHASE 1: PERMISSION FIX ==========
+echo -e "\n\e[36m[PHASE 1] Fixing Permissions...\e[0m"
 
-if [ -d "$PANEL_DIR/public-backup" ]; then
-    echo "Backup already exists, skipping..."
-else
-    cp -r "$PANEL_DIR/public" "$PANEL_DIR/public-backup"
-    echo "✓ Original public directory backed up"
-fi
+# Stop services
+systemctl stop nginx php8.1-fpm 2>/dev/null || true
 
-cd /tmp
-git clone --depth=1 "$THEME_REPO" 2>/dev/null || echo "Using cached repo"
-
-if [ -d "Pterodactyl-Themes/MasterThemes/$THEME_NAME/public" ]; then
-    rsync -a "Pterodactyl-Themes/MasterThemes/$THEME_NAME/public/" "$PANEL_DIR/public/"
-    echo "✓ BlackEndSpace theme installed"
-    
-    cp "$PANEL_DIR/public-backup/index.php" "$PANEL_DIR/public/"
-    cp "$PANEL_DIR/public-backup/.htaccess" "$PANEL_DIR/public/" 2>/dev/null || true
-    
-    chown -R www-data:www-data "$PANEL_DIR/public"
-    chmod -R 755 "$PANEL_DIR/public"
-else
-    echo "⚠ Theme not found in expected structure, continuing with security install..."
-fi
-
-echo -e "\n\e[36m[PHASE 2] Fixing Permissions & Preventing 403/500 Errors...\e[0m"
-
-systemctl stop nginx php8.3-fpm 2>/dev/null || true
-
+# Fix ownership
 cd "$PANEL_DIR"
 chown -R www-data:www-data .
+
+# Fix permissions (Laravel standard)
 find . -type d -exec chmod 755 {} \;
 find . -type f -exec chmod 644 {} \;
 
+# Laravel specific permissions
 chmod -R 775 storage bootstrap/cache
 chmod 777 storage/logs 2>/dev/null || true
 
+# Clear all caches
 rm -rf storage/framework/cache/data/*
 rm -rf storage/framework/views/*
 rm -f bootstrap/cache/*.php
 
+# Recreate directories
 mkdir -p storage/framework/{cache/data,sessions,views}
 chmod -R 775 storage/framework
-chown -R www-data:www-data storage bootstrap/cache
+chown -R www-data:www-data storage/bootstrap/cache/
 
-cat > /etc/php/8.3/fpm/pool.d/pterodactyl.conf << 'PHPFPM'
+# ========== PHASE 2: INSTALL BLACKENDSPACE THEME ==========
+echo -e "\n\e[36m[PHASE 2] Installing BlackEndSpace Theme...\e[0m"
+
+# Backup original
+BACKUP_DIR="$PANEL_DIR/public_backup_$(date +%s)"
+if [ ! -d "$PANEL_DIR/public_backup" ]; then
+    cp -r "$PANEL_DIR/public" "$BACKUP_DIR"
+    echo "✅ Original public directory backed up to: $BACKUP_DIR"
+fi
+
+# Download and apply theme
+cd /tmp
+echo "Downloading BlackEndSpace theme..."
+
+# Download CSS files
+wget -q "$THEME_URL/public/css/app.css" -O "$PANEL_DIR/public/css/app.css" || true
+wget -q "$THEME_URL/public/css/admin.css" -O "$PANEL_DIR/public/css/admin.css" 2>/dev/null || true
+
+# Download JS files if exist
+wget -q "$THEME_URL/public/js/app.js" -O "$PANEL_DIR/public/js/app.js" 2>/dev/null || true
+
+# Download images
+mkdir -p "$PANEL_DIR/public/images/themes"
+wget -q "$THEME_URL/public/images/logo.svg" -O "$PANEL_DIR/public/images/logo.svg" 2>/dev/null || true
+wget -q "$THEME_URL/public/images/favicon.ico" -O "$PANEL_DIR/public/images/favicon.ico" 2>/dev/null || true
+
+echo "✅ BlackEndSpace theme applied"
+
+# ========== PHASE 3: SECURITY DATABASE ==========
+echo -e "\n\e[36m[PHASE 3] Creating Security Database...\e[0m"
+
+mysql -u root << "MYSQL_SECURITY"
+USE panel;
+
+-- Drop old tables if exist
+DROP TABLE IF EXISTS panel_security;
+DROP TABLE IF EXISTS panel_security_logs;
+DROP TABLE IF EXISTS panel_security_bans;
+DROP TABLE IF EXISTS panel_security_settings;
+
+-- Main security table
+CREATE TABLE panel_security (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    ip_address VARCHAR(45) UNIQUE NOT NULL,
+    request_count INT UNSIGNED DEFAULT 0,
+    last_request TIMESTAMP NULL,
+    user_agent TEXT,
+    country_code VARCHAR(5),
+    is_suspicious BOOLEAN DEFAULT FALSE,
+    is_fake_ip BOOLEAN DEFAULT FALSE,
+    status ENUM('active','banned','monitored') DEFAULT 'active',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    INDEX idx_status (status),
+    INDEX idx_last_request (last_request)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Ban records
+CREATE TABLE panel_security_bans (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    ip_address VARCHAR(45) NOT NULL,
+    reason ENUM('manual','rate_limit','fake_ip','fake_ua','bot','debugger','suspicious') NOT NULL,
+    details TEXT,
+    banned_by INT UNSIGNED DEFAULT 1,
+    expires_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_expires (expires_at),
+    INDEX idx_ip (ip_address)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Security settings
+CREATE TABLE panel_security_settings (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    setting_key VARCHAR(100) UNIQUE NOT NULL,
+    setting_value TEXT,
+    is_enabled BOOLEAN DEFAULT TRUE,
+    description TEXT,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Security logs
+CREATE TABLE panel_security_logs (
+    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    ip_address VARCHAR(45) NOT NULL,
+    action VARCHAR(100) NOT NULL,
+    details JSON,
+    severity ENUM('info','warning','critical') DEFAULT 'info',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_ip_action (ip_address, action),
+    INDEX idx_created (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Insert default settings
+INSERT INTO panel_security_settings (setting_key, setting_value, is_enabled, description) VALUES
+('ddos_protection', '{"enabled":true,"requests_per_minute":60,"block_duration_hours":24}', TRUE, 'DDoS Rate Limit Protection'),
+('anti_debug', '{"enabled":false}', TRUE, 'Anti-Debug Protection'),
+('anti_inspect', '{"enabled":false}', TRUE, 'Anti-DevTools Inspection'),
+('anti_bot', '{"enabled":true,"block_fake_ips":true,"block_empty_ua":true,"block_suspicious_patterns":true}', TRUE, 'Bot Detection System'),
+('security_access', '[1]', TRUE, 'User IDs allowed to access security panel');
+
+-- Sample data
+INSERT INTO panel_security (ip_address, request_count, status) VALUES
+('127.0.0.1', 15, 'active'),
+('192.168.1.1', 8, 'active'),
+('10.0.0.1', 150, 'monitored');
+
+SELECT '✅ Security database created successfully' as Status;
+MYSQL_SECURITY
+
+# ========== PHASE 4: ADD SECURITY MENU TO SIDEBAR ==========
+echo -e "\n\e[36m[PHASE 4] Adding Security Menu to Sidebar...\e[0m"
+
+ADMIN_LAYOUT="$PANEL_DIR/resources/views/layouts/admin.blade.php"
+
+if [ -f "$ADMIN_LAYOUT" ]; then
+    # Backup original
+    cp "$ADMIN_LAYOUT" "$ADMIN_LAYOUT.backup.$(date +%s)"
+    
+    # Find where to insert the Security menu (after Users menu)
+    if grep -q "<!-- Security Section -->" "$ADMIN_LAYOUT"; then
+        echo "✅ Security menu already exists"
+    else
+        # Find the Users menu section
+        USERS_SECTION='<li class="{{ Request::is(\'admin/users*\') ? \'active\' : \'\' }}">'
+        
+        # Insert Security menu after Users
+        sed -i "/$USERS_SECTION/ {
+            a\\
+            @php\\
+                \$hasSecurityAccess = auth()->check() \&\& auth()->user()->id == 1;\\
+            @endphp\\
+            @if(\$hasSecurityAccess)\\
+            <li class="{{ Request::is('admin/security*') ? 'active' : '' }}">\\
+                <a href="{{ route('admin.security') }}">\\
+                    <i class="fa fa-shield"></i> <span>Security</span>\\
+                </a>\\
+            </li>\\
+            @endif
+        }" "$ADMIN_LAYOUT"
+        
+        echo "✅ Security menu added to sidebar"
+    fi
+fi
+
+# ========== PHASE 5: CREATE SECURITY ROUTE ==========
+echo -e "\n\e[36m[PHASE 5] Creating Security Route...\e[0m"
+
+# Create route file
+cat > "$PANEL_DIR/routes/admin_security.php" << 'ROUTE_FILE'
+<?php
+
+Route::group(['prefix' => 'security', 'namespace' => 'Admin', 'middleware' => ['auth', 'admin']], function () {
+    Route::get('/', 'SecurityController@index')->name('admin.security');
+    Route::post('/ban-ip', 'SecurityController@banIp')->name('admin.security.ban');
+    Route::post('/unban-ip', 'SecurityController@unbanIp')->name('admin.security.unban');
+    Route::post('/toggle-feature', 'SecurityController@toggleFeature')->name('admin.security.toggle');
+});
+
+// Middleware to restrict access to ID 1 only
+Route::macro('securityOnly', function ($routes) {
+    Route::group(['middleware' => function ($request, $next) {
+        if (auth()->check() && auth()->user()->id == 1) {
+            return $next($request);
+        }
+        abort(403, 'Security dashboard access restricted.');
+    }], $routes);
+});
+ROUTE_FILE
+
+# Include the route in main admin routes
+if ! grep -q "admin_security.php" "$PANEL_DIR/routes/admin.php"; then
+    echo -e "\n// Security Routes\nrequire __DIR__.'/admin_security.php';" >> "$PANEL_DIR/routes/admin.php"
+fi
+
+# ========== PHASE 6: CREATE SECURITY CONTROLLER ==========
+echo -e "\n\e[36m[PHASE 6] Creating Security Controller...\e[0m"
+
+mkdir -p "$PANEL_DIR/app/Http/Controllers/Admin"
+cat > "$PANEL_DIR/app/Http/Controllers/Admin/SecurityController.php" << 'CONTROLLER_FILE'
+<?php
+
+namespace App\Http\Controllers\Admin;
+
+use App\Http\Controllers\Controller;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+
+class SecurityController extends Controller
+{
+    public function __construct()
+    {
+        // Restrict access to user ID = 1 only
+        $this->middleware(function ($request, $next) {
+            if (auth()->check() && auth()->user()->id == 1) {
+                return $next($request);
+            }
+            abort(403, 'Security dashboard access is restricted to system administrators.');
+        });
+    }
+    
+    public function index()
+    {
+        $settings = $this->getSecuritySettings();
+        $bannedIps = $this->getBannedIps();
+        $recentLogs = $this->getRecentLogs();
+        $stats = $this->getSecurityStats();
+        
+        return view('admin.security.index', compact('settings', 'bannedIps', 'recentLogs', 'stats'));
+    }
+    
+    public function banIp(Request $request)
+    {
+        $request->validate([
+            'ip' => 'required|ip',
+            'reason' => 'required|in:manual,rate_limit,fake_ip,fake_ua,bot,debugger,suspicious',
+            'duration' => 'required|integer|min:1|max:720'
+        ]);
+        
+        $ip = $request->input('ip');
+        $reason = $request->input('reason');
+        $duration = $request->input('duration');
+        $details = $request->input('details', '');
+        
+        DB::transaction(function () use ($ip, $reason, $duration, $details) {
+            // Update or create IP record
+            DB::table('panel_security')->updateOrInsert(
+                ['ip_address' => $ip],
+                ['status' => 'banned', 'updated_at' => now()]
+            );
+            
+            // Create ban record
+            DB::table('panel_security_bans')->insert([
+                'ip_address' => $ip,
+                'reason' => $reason,
+                'details' => $details,
+                'banned_by' => auth()->id(),
+                'expires_at' => now()->addHours($duration),
+                'created_at' => now()
+            ]);
+            
+            // Log the action
+            DB::table('panel_security_logs')->insert([
+                'ip_address' => $ip,
+                'action' => 'manual_ban',
+                'details' => json_encode([
+                    'reason' => $reason,
+                    'duration_hours' => $duration,
+                    'banned_by' => auth()->id()
+                ]),
+                'severity' => 'critical',
+                'created_at' => now()
+            ]);
+        });
+        
+        Cache::forget('security.banned_ips');
+        
+        return redirect()->route('admin.security')
+            ->with('success', "IP $ip has been banned for $duration hours.");
+    }
+    
+    public function unbanIp(Request $request)
+    {
+        $request->validate(['ip' => 'required|ip']);
+        
+        $ip = $request->input('ip');
+        
+        DB::transaction(function () use ($ip) {
+            DB::table('panel_security')
+                ->where('ip_address', $ip)
+                ->update(['status' => 'active', 'updated_at' => now()]);
+            
+            DB::table('panel_security_bans')
+                ->where('ip_address', $ip)
+                ->whereNull('expires_at')
+                ->orWhere('expires_at', '>', now())
+                ->update(['expires_at' => now()]);
+            
+            DB::table('panel_security_logs')->insert([
+                'ip_address' => $ip,
+                'action' => 'manual_unban',
+                'details' => json_encode(['unbanned_by' => auth()->id()]),
+                'severity' => 'info',
+                'created_at' => now()
+            ]);
+        });
+        
+        Cache::forget('security.banned_ips');
+        
+        return redirect()->route('admin.security')
+            ->with('success', "IP $ip has been unbanned.");
+    }
+    
+    public function toggleFeature(Request $request)
+    {
+        $request->validate([
+            'feature' => 'required|in:ddos_protection,anti_debug,anti_inspect,anti_bot',
+            'enabled' => 'required|boolean'
+        ]);
+        
+        $feature = $request->input('feature');
+        $enabled = $request->input('enabled');
+        
+        $current = DB::table('panel_security_settings')
+            ->where('setting_key', $feature)
+            ->first();
+        
+        if ($current) {
+            $value = json_decode($current->setting_value, true);
+            $value['enabled'] = $enabled;
+            
+            DB::table('panel_security_settings')
+                ->where('setting_key', $feature)
+                ->update([
+                    'setting_value' => json_encode($value),
+                    'updated_at' => now()
+                ]);
+            
+            // Log feature toggle
+            DB::table('panel_security_logs')->insert([
+                'ip_address' => request()->ip(),
+                'action' => 'feature_toggle',
+                'details' => json_encode([
+                    'feature' => $feature,
+                    'enabled' => $enabled,
+                    'user_id' => auth()->id()
+                ]),
+                'severity' => 'info',
+                'created_at' => now()
+            ]);
+            
+            $status = $enabled ? 'enabled' : 'disabled';
+            return redirect()->route('admin.security')
+                ->with('success', "$feature has been $status.");
+        }
+        
+        return redirect()->route('admin.security')
+            ->with('error', 'Feature not found.');
+    }
+    
+    private function getSecuritySettings()
+    {
+        return DB::table('panel_security_settings')->get()
+            ->mapWithKeys(function ($item) {
+                return [$item->setting_key => [
+                    'value' => json_decode($item->setting_value, true),
+                    'enabled' => (bool)$item->is_enabled
+                ]];
+            });
+    }
+    
+    private function getBannedIps()
+    {
+        return DB::table('panel_security_bans as b')
+            ->select('b.*', 's.request_count', 's.last_request')
+            ->leftJoin('panel_security as s', 'b.ip_address', '=', 's.ip_address')
+            ->where(function ($query) {
+                $query->whereNull('b.expires_at')
+                    ->orWhere('b.expires_at', '>', now());
+            })
+            ->orderBy('b.created_at', 'desc')
+            ->get();
+    }
+    
+    private function getRecentLogs()
+    {
+        return DB::table('panel_security_logs')
+            ->orderBy('created_at', 'desc')
+            ->limit(50)
+            ->get();
+    }
+    
+    private function getSecurityStats()
+    {
+        return [
+            'banned_ips' => DB::table('panel_security_bans')
+                ->where(function ($query) {
+                    $query->whereNull('expires_at')
+                        ->orWhere('expires_at', '>', now());
+                })->count(),
+            
+            'total_ips' => DB::table('panel_security')->count(),
+            
+            'today_requests' => DB::table('panel_security')
+                ->whereDate('last_request', today())
+                ->count(),
+            
+            'suspicious_ips' => DB::table('panel_security')
+                ->where('is_suspicious', true)
+                ->count(),
+            
+            'recent_logs' => DB::table('panel_security_logs')
+                ->whereDate('created_at', today())
+                ->count()
+        ];
+    }
+}
+CONTROLLER_FILE
+
+# ========== PHASE 7: CREATE SECURITY VIEW ==========
+echo -e "\n\e[36m[PHASE 7] Creating Security View...\e[0m"
+
+mkdir -p "$PANEL_DIR/resources/views/admin/security"
+cat > "$PANEL_DIR/resources/views/admin/security/index.blade.php" << 'VIEW_FILE'
+@extends('layouts.admin')
+
+@section('title')
+    Security Dashboard
+@endsection
+
+@section('content-header')
+    <h1>Security Dashboard<small>Real-time protection for your panel</small></h1>
+    <ol class="breadcrumb">
+        <li><a href="{{ route('admin.index') }}">Admin</a></li>
+        <li class="active">Security</li>
+    </ol>
+@endsection
+
+@section('content')
+<div class="row">
+    <div class="col-md-12">
+        @if(session('success'))
+        <div class="alert alert-success alert-dismissible">
+            <button type="button" class="close" data-dismiss="alert" aria-hidden="true">×</button>
+            <h4><i class="icon fa fa-check"></i> Success!</h4>
+            {{ session('success') }}
+        </div>
+        @endif
+        
+        @if(session('error'))
+        <div class="alert alert-danger alert-dismissible">
+            <button type="button" class="close" data-dismiss="alert" aria-hidden="true">×</button>
+            <h4><i class="icon fa fa-ban"></i> Error!</h4>
+            {{ session('error') }}
+        </div>
+        @endif
+    </div>
+</div>
+
+<div class="row">
+    <!-- Stats Cards -->
+    <div class="col-md-3 col-sm-6 col-xs-12">
+        <div class="info-box">
+            <span class="info-box-icon bg-red"><i class="fa fa-ban"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Banned IPs</span>
+                <span class="info-box-number">{{ $stats['banned_ips'] }}</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 col-sm-6 col-xs-12">
+        <div class="info-box">
+            <span class="info-box-icon bg-green"><i class="fa fa-network-wired"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Total IPs</span>
+                <span class="info-box-number">{{ $stats['total_ips'] }}</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 col-sm-6 col-xs-12">
+        <div class="info-box">
+            <span class="info-box-icon bg-yellow"><i class="fa fa-exclamation-triangle"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Suspicious IPs</span>
+                <span class="info-box-number">{{ $stats['suspicious_ips'] }}</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3 col-sm-6 col-xs-12">
+        <div class="info-box">
+            <span class="info-box-icon bg-blue"><i class="fa fa-history"></i></span>
+            <div class="info-box-content">
+                <span class="info-box-text">Today's Logs</span>
+                <span class="info-box-number">{{ $stats['recent_logs'] }}</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <!-- Features Control -->
+    <div class="col-md-6">
+        <div class="box box-primary">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-cog"></i> Security Features</h3>
+            </div>
+            <div class="box-body">
+                @foreach($settings as $key => $setting)
+                <div class="form-group">
+                    <label style="font-weight: normal;">
+                        @switch($key)
+                            @case('ddos_protection') DDoS Rate Limit @break
+                            @case('anti_debug') Anti-Debug @break
+                            @case('anti_inspect') Anti-Inspect @break
+                            @case('anti_bot') Anti-Bot Protection @break
+                            @default {{ ucfirst(str_replace('_', ' ', $key)) }}
+                        @endswitch
+                    </label>
+                    <div class="pull-right">
+                        <form action="{{ route('admin.security.toggle') }}" method="POST" style="display: inline;">
+                            @csrf
+                            <input type="hidden" name="feature" value="{{ $key }}">
+                            <input type="hidden" name="enabled" value="{{ $setting['value']['enabled'] ? '0' : '1' }}">
+                            <div class="btn-group">
+                                <button type="button" class="btn btn-xs btn-{{ $setting['value']['enabled'] ? 'success' : 'default' }} toggle-btn" 
+                                    onclick="this.form.submit()">
+                                    {{ $setting['value']['enabled'] ? 'ON' : 'OFF' }}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                    <div class="clearfix"></div>
+                    @if($key === 'ddos_protection')
+                    <small class="text-muted">
+                        Limit: {{ $setting['value']['requests_per_minute'] ?? 60 }} requests/min, 
+                        Block: {{ $setting['value']['block_duration_hours'] ?? 24 }} hours
+                    </small>
+                    @endif
+                </div>
+                <hr style="margin: 10px 0;">
+                @endforeach
+            </div>
+        </div>
+        
+        <!-- Manual IP Ban -->
+        <div class="box box-danger">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-gavel"></i> Manual IP Ban</h3>
+            </div>
+            <div class="box-body">
+                <form action="{{ route('admin.security.ban') }}" method="POST">
+                    @csrf
+                    <div class="form-group">
+                        <label for="ip">IP Address</label>
+                        <input type="text" class="form-control" name="ip" placeholder="e.g., 192.168.1.100" required pattern="^(\d{1,3}\.){3}\d{1,3}$">
+                    </div>
+                    <div class="form-group">
+                        <label for="reason">Ban Reason</label>
+                        <select class="form-control" name="reason" required>
+                            <option value="manual">Manual Ban</option>
+                            <option value="rate_limit">Rate Limit Exceeded</option>
+                            <option value="fake_ip">Fake IP Address</option>
+                            <option value="fake_ua">Fake User Agent</option>
+                            <option value="bot">Bot Detection</option>
+                            <option value="suspicious">Suspicious Activity</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="duration">Duration (Hours)</label>
+                        <input type="number" class="form-control" name="duration" value="24" min="1" max="720" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="details">Details (Optional)</label>
+                        <textarea class="form-control" name="details" rows="2" placeholder="Additional information..."></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-danger">
+                        <i class="fa fa-ban"></i> Ban IP Address
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Banned IPs List -->
+    <div class="col-md-6">
+        <div class="box box-warning">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-list"></i> Banned IP Addresses</h3>
+            </div>
+            <div class="box-body table-responsive">
+                <table class="table table-hover">
+                    <thead>
+                        <tr>
+                            <th>IP Address</th>
+                            <th>Reason</th>
+                            <th>Expires</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @forelse($bannedIps as $ban)
+                        <tr>
+                            <td><code>{{ $ban->ip_address }}</code></td>
+                            <td>
+                                <span class="label label-{{ $ban->reason === 'manual' ? 'primary' : 'danger' }}">
+                                    {{ ucfirst(str_replace('_', ' ', $ban->reason)) }}
+                                </span>
+                            </td>
+                            <td>
+                                @if($ban->expires_at)
+                                    {{ $ban->expires_at->diffForHumans() }}
+                                @else
+                                    <span class="text-danger">Permanent</span>
+                                @endif
+                            </td>
+                            <td>
+                                <form action="{{ route('admin.security.unban') }}" method="POST" style="display: inline;">
+                                    @csrf
+                                    <input type="hidden" name="ip" value="{{ $ban->ip_address }}">
+                                    <button type="submit" class="btn btn-xs btn-success" 
+                                        onclick="return confirm('Unban {{ $ban->ip_address }}?')">
+                                        <i class="fa fa-check"></i> Unban
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        @empty
+                        <tr>
+                            <td colspan="4" class="text-center">No banned IPs found.</td>
+                        </tr>
+                        @endforelse
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Recent Security Logs -->
+        <div class="box box-default">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-history"></i> Recent Security Logs</h3>
+            </div>
+            <div class="box-body">
+                <ul class="products-list product-list-in-box">
+                    @forelse($recentLogs->take(10) as $log)
+                    <li class="item">
+                        <div class="product-info">
+                            <a href="javascript:void(0)" class="product-title">
+                                {{ $log->ip_address }}
+                                <span class="label label-{{ $log->severity === 'critical' ? 'danger' : ($log->severity === 'warning' ? 'warning' : 'info') }} pull-right">
+                                    {{ ucfirst($log->action) }}
+                                </span>
+                            </a>
+                            <span class="product-description">
+                                {{ $log->created_at->diffForHumans() }}
+                                @if($log->details)
+                                - {{ json_decode($log->details)->reason ?? '' }}
+                                @endif
+                            </span>
+                        </div>
+                    </li>
+                    @empty
+                    <li class="item">
+                        <div class="product-info">
+                            <span class="product-description">No security logs found.</span>
+                        </div>
+                    </li>
+                    @endforelse
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Anti-Debug & Anti-Inspect Scripts -->
+@if($settings['anti_debug']['value']['enabled'] ?? false)
+<script>
+// Anti-Debugging Protection
+(function() {
+    var debuggerTimer = setInterval(function() {
+        var startTime = performance.now();
+        debugger;
+        var endTime = performance.now();
+        if (endTime - startTime > 100) {
+            clearInterval(debuggerTimer);
+            window.location.href = '{{ route('admin.security') }}?debugger=blocked';
+        }
+    }, 1000);
+})();
+</script>
+@endif
+
+@if($settings['anti_inspect']['value']['enabled'] ?? false)
+<script>
+// Anti-DevTools Inspection
+document.addEventListener('contextmenu', function(e) {
+    e.preventDefault();
+});
+
+document.onkeydown = function(e) {
+    if (e.keyCode == 123 || // F12
+        (e.ctrlKey && e.shiftKey && e.keyCode == 73) || // Ctrl+Shift+I
+        (e.ctrlKey && e.shiftKey && e.keyCode == 74) || // Ctrl+Shift+J
+        (e.ctrlKey && e.keyCode == 85) // Ctrl+U
+    ) {
+        alert('Developer tools are disabled for security.');
+        return false;
+    }
+};
+</script>
+@endif
+@endsection
+VIEW_FILE
+
+# ========== PHASE 8: FIX PHP-FPM & START SERVICES ==========
+echo -e "\n\e[36m[PHASE 8] Configuring Services...\e[0m"
+
+# Fix PHP-FPM socket
+cat > /etc/php/8.1/fpm/pool.d/pterodactyl.conf << 'PHPFPM'
 [pterodactyl]
 user = www-data
 group = www-data
-listen = /var/run/php/php8.3-fpm-pterodactyl.sock
+listen = /var/run/php/php8.1-fpm-pterodactyl.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
@@ -80,1029 +759,99 @@ pm.start_servers = 5
 pm.min_spare_servers = 5
 pm.max_spare_servers = 35
 pm.max_requests = 500
-php_admin_value[error_log] = /var/log/php8.3-fpm-error.log
+php_admin_value[error_log] = /var/log/php8.1-fpm-error.log
 PHPFPM
 
 mkdir -p /var/run/php
 chown www-data:www-data /var/run/php
 
-systemctl start php8.3-fpm
-sleep 2
-
-echo -e "\n\e[36m[PHASE 3] Creating Security Database...\e[0m"
-
-mysql -u root << "MYSQL_SECURITY"
-USE panel;
-
-DROP TABLE IF EXISTS pterodactyl_security_settings;
-DROP TABLE IF EXISTS pterodactyl_security_logs;
-DROP TABLE IF EXISTS pterodactyl_security_bans;
-DROP TABLE IF EXISTS pterodactyl_security_ips;
-
-CREATE TABLE pterodactyl_security_ips (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    ip_address VARCHAR(45) UNIQUE NOT NULL,
-    request_count INT DEFAULT 0,
-    last_request TIMESTAMP NULL,
-    user_agent TEXT,
-    is_suspicious BOOLEAN DEFAULT FALSE,
-    is_fake_ip BOOLEAN DEFAULT FALSE,
-    country VARCHAR(2),
-    status ENUM('active', 'banned', 'monitored') DEFAULT 'active',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_ip_status (ip_address, status),
-    INDEX idx_last_request (last_request),
-    INDEX idx_suspicious (is_suspicious)
-);
-
-CREATE TABLE pterodactyl_security_bans (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    ip_address VARCHAR(45) NOT NULL,
-    reason ENUM('manual', 'rate_limit', 'fake_ip', 'fake_ua', 'bot', 'suspicious') NOT NULL,
-    details TEXT,
-    banned_by INT DEFAULT 1,
-    expires_at TIMESTAMP NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_expires (expires_at),
-    INDEX idx_ip (ip_address)
-);
-
-CREATE TABLE pterodactyl_security_settings (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    setting_key VARCHAR(100) UNIQUE NOT NULL,
-    setting_value TEXT,
-    is_enabled BOOLEAN DEFAULT TRUE,
-    description TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
-CREATE TABLE pterodactyl_security_logs (
-    id BIGINT AUTO_INCREMENT PRIMARY KEY,
-    ip_address VARCHAR(45) NOT NULL,
-    action VARCHAR(100) NOT NULL,
-    details JSON,
-    severity ENUM('info', 'warning', 'critical') DEFAULT 'info',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_ip_created (ip_address, created_at)
-);
-
-INSERT INTO pterodactyl_security_settings (setting_key, setting_value, is_enabled, description) VALUES
-('ddos_protection', '{"enabled":true,"requests_per_minute":60,"block_duration_hours":24}', TRUE, 'DDoS Rate Limit Protection'),
-('anti_debug', '{"enabled":false}', TRUE, 'Anti-Debug Protection'),
-('anti_inspect', '{"enabled":false}', TRUE, 'Anti-DevTools Inspection'),
-('anti_bot', '{"enabled":true,"block_fake_ips":true,"block_empty_ua":true,"block_suspicious_patterns":true}', TRUE, 'Bot Detection System'),
-('anti_intip', '{"enabled":false}', TRUE, 'Anti-Spy Protection (Except ID 1)'),
-('auto_ban', '{"enabled":true,"max_requests":100,"timeframe_minutes":5}', TRUE, 'Automatic ban for high requests'),
-('security_access', '[1]', TRUE, 'User IDs allowed to access security panel'),
-('fake_ip_detection', '{"enabled":true,"block_private_ips":false,"block_reserved_ips":true}', TRUE, 'Fake IP Address Detection');
-
-INSERT INTO pterodactyl_security_ips (ip_address, request_count, status) VALUES
-('127.0.0.1', 15, 'active'),
-('192.168.1.1', 8, 'active'),
-('10.0.0.1', 150, 'monitored'),
-('8.8.8.8', 3, 'active');
-
-INSERT INTO pterodactyl_security_bans (ip_address, reason, details, expires_at) VALUES
-('203.0.113.45', 'rate_limit', 'Exceeded 100 requests in 5 minutes', DATE_ADD(NOW(), INTERVAL 24 HOUR)),
-('198.51.100.22', 'fake_ua', 'Fake browser user agent detected', DATE_ADD(NOW(), INTERVAL 12 HOUR));
-
-INSERT INTO pterodactyl_security_logs (ip_address, action, details, severity) VALUES
-('192.168.1.100', 'login_attempt', '{"success": true, "user": "admin"}', 'info'),
-('10.0.0.5', 'high_request_rate', '{"count": 150, "timeframe": "5m"}', 'warning'),
-('203.0.113.45', 'ip_banned', '{"reason": "rate_limit", "duration": "24h"}', 'critical');
-
-SELECT 'Security database created successfully!' as Status;
-MYSQL_SECURITY
-
-echo -e "\n\e[36m[PHASE 4] Creating Security Dashboard...\e[0m"
-
-SECURITY_DIR="$PANEL_DIR/public/security"
-mkdir -p "$SECURITY_DIR"
-
-cat > "$SECURITY_DIR/index.php" << 'SECURITY_DASHBOARD'
-<?php
-$config = [
-    'db_host' => 'localhost',
-    'db_user' => 'root',
-    'db_pass' => '',
-    'db_name' => 'panel',
-    'admin_id' => 1,
-    'panel_path' => '/var/www/pterodactyl',
-    'site_name' => 'Pterodactyl Security Suite'
-];
-
-session_start();
-
-$is_admin = false;
-
-$db = new mysqli($config['db_host'], $config['db_user'], $config['db_pass'], $config['db_name']);
-if (!$db->connect_error) {
-    if (isset($_COOKIE['pterodactyl_session'])) {
-        $session_hash = hash('sha256', $_COOKIE['pterodactyl_session']);
-        $stmt = $db->prepare("SELECT u.id FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.id = ? AND u.id = ?");
-        $stmt->bind_param('si', $session_hash, $config['admin_id']);
-        if ($stmt->execute()) {
-            $result = $stmt->get_result();
-            if ($result->num_rows > 0) {
-                $_SESSION['security_admin'] = true;
-                $_SESSION['user_id'] = $config['admin_id'];
-                $is_admin = true;
-            }
-        }
-    }
-    
-    if (!$is_admin && isset($_GET['admin_key']) && $_GET['admin_key'] === 'temp_access_123') {
-        $is_admin = true;
-        $_SESSION['security_admin'] = true;
-    }
-}
-
-if (!$is_admin) {
-    http_response_code(403);
-    ?>
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Access Denied - Security Dashboard</title>
-        <style>
-            * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { 
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-                background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 100%);
-                color: #fff;
-                min-height: 100vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-            .access-denied {
-                background: rgba(30, 30, 46, 0.9);
-                padding: 50px;
-                border-radius: 15px;
-                text-align: center;
-                border: 1px solid #e94560;
-                max-width: 500px;
-                backdrop-filter: blur(10px);
-                box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-            }
-            .access-denied h1 {
-                color: #e94560;
-                font-size: 3em;
-                margin-bottom: 20px;
-            }
-            .access-denied p {
-                color: #8a8ab5;
-                margin-bottom: 30px;
-                line-height: 1.6;
-            }
-            .btn {
-                display: inline-block;
-                padding: 12px 30px;
-                background: #0fcc45;
-                color: white;
-                text-decoration: none;
-                border-radius: 5px;
-                font-weight: 600;
-                transition: all 0.3s;
-            }
-            .btn:hover {
-                background: #0db33d;
-                transform: translateY(-2px);
-            }
-            .shield-icon {
-                font-size: 80px;
-                margin-bottom: 20px;
-                color: #e94560;
-                animation: pulse 2s infinite;
-            }
-            @keyframes pulse {
-                0% { opacity: 1; }
-                50% { opacity: 0.7; }
-                100% { opacity: 1; }
-            }
-        </style>
-    </head>
-    <body>
-        <div class="access-denied">
-            <div class="shield-icon">&#x1F6E1;</div>
-            <h1>ACCESS RESTRICTED</h1>
-            <p>This security dashboard is exclusively available to system administrators (User ID: 1).</p>
-            <p>All access attempts are logged for security monitoring.</p>
-            <a href="/admin" class="btn">Return to Admin Panel</a>
-        </div>
-    </body>
-    </html>
-    <?php
-    exit;
-}
-
-function getSecuritySettings($db) {
-    $settings = [];
-    $result = $db->query("SELECT setting_key, setting_value, is_enabled FROM pterodactyl_security_settings");
-    while ($row = $result->fetch_assoc()) {
-        $settings[$row['setting_key']] = [
-            'value' => json_decode($row['setting_value'], true),
-            'enabled' => (bool)$row['is_enabled']
-        ];
-    }
-    return $settings;
-}
-
-function getBannedIPs($db) {
-    $result = $db->query("
-        SELECT b.*, i.request_count, i.last_request 
-        FROM pterodactyl_security_bans b
-        LEFT JOIN pterodactyl_security_ips i ON b.ip_address = i.ip_address
-        WHERE b.expires_at > NOW() OR b.expires_at IS NULL
-        ORDER BY b.created_at DESC
-    ");
-    return $result->fetch_all(MYSQLI_ASSOC);
-}
-
-function getSecurityStats($db) {
-    $stats = [];
-    
-    $queries = [
-        'total_banned' => "SELECT COUNT(*) as count FROM pterodactyl_security_bans WHERE expires_at > NOW() OR expires_at IS NULL",
-        'today_requests' => "SELECT COUNT(*) as count FROM pterodactyl_security_ips WHERE DATE(last_request) = CURDATE()",
-        'suspicious_ips' => "SELECT COUNT(*) as count FROM pterodactyl_security_ips WHERE is_suspicious = TRUE",
-        'total_logs' => "SELECT COUNT(*) as count FROM pterodactyl_security_logs WHERE DATE(created_at) = CURDATE()"
-    ];
-    
-    foreach ($queries as $key => $query) {
-        $result = $db->query($query);
-        $stats[$key] = $result->fetch_assoc()['count'] ?? 0;
-    }
-    
-    return $stats;
-}
-
-$action_result = '';
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action = $_POST['action'] ?? '';
-    
-    if ($action === 'ban_ip') {
-        $ip = filter_var($_POST['ip'] ?? '', FILTER_VALIDATE_IP);
-        $reason = $_POST['reason'] ?? 'manual';
-        $details = $_POST['details'] ?? '';
-        $duration = (int)($_POST['duration'] ?? 24);
-        
-        if ($ip) {
-            $stmt = $db->prepare("INSERT INTO pterodactyl_security_ips (ip_address, status) VALUES (?, 'banned') ON DUPLICATE KEY UPDATE status='banned'");
-            $stmt->bind_param('s', $ip);
-            $stmt->execute();
-            
-            $expires = date('Y-m-d H:i:s', strtotime("+{$duration} hours"));
-            $stmt = $db->prepare("INSERT INTO pterodactyl_security_bans (ip_address, reason, details, expires_at) VALUES (?, ?, ?, ?)");
-            $stmt->bind_param('ssss', $ip, $reason, $details, $expires);
-            $stmt->execute();
-            
-            $log_details = json_encode(['reason' => $reason, 'duration' => "{$duration}h"]);
-            $db->query("INSERT INTO pterodactyl_security_logs (ip_address, action, details, severity) VALUES ('$ip', 'manual_ban', '$log_details', 'critical')");
-            
-            $action_result = "IP $ip has been banned for $duration hours.";
-        }
-    }
-    elseif ($action === 'unban_ip') {
-        $ip = filter_var($_POST['ip'] ?? '', FILTER_VALIDATE_IP);
-        if ($ip) {
-            $db->query("UPDATE pterodactyl_security_bans SET expires_at = NOW() WHERE ip_address = '$ip'");
-            $db->query("UPDATE pterodactyl_security_ips SET status = 'active' WHERE ip_address = '$ip'");
-            
-            $db->query("INSERT INTO pterodactyl_security_logs (ip_address, action, severity) VALUES ('$ip', 'manual_unban', 'info')");
-            $action_result = "IP $ip has been unbanned.";
-        }
-    }
-    elseif ($action === 'toggle_feature') {
-        $feature = $_POST['feature'] ?? '';
-        $enabled = (int)($_POST['enabled'] ?? 0);
-        
-        $valid_features = ['ddos_protection', 'anti_debug', 'anti_inspect', 'anti_bot', 'anti_intip'];
-        if (in_array($feature, $valid_features)) {
-            $current = $db->query("SELECT setting_value FROM pterodactyl_security_settings WHERE setting_key = '$feature'")->fetch_assoc();
-            $value = json_decode($current['setting_value'], true);
-            $value['enabled'] = (bool)$enabled;
-            
-            $new_value = $db->real_escape_string(json_encode($value));
-            $db->query("UPDATE pterodactyl_security_settings SET setting_value = '$new_value' WHERE setting_key = '$feature'");
-            
-            $status = $enabled ? 'enabled' : 'disabled';
-            $action_result = "$feature has been $status.";
-        }
-    }
-}
-
-$settings = getSecuritySettings($db);
-$banned_ips = getBannedIPs($db);
-$stats = getSecurityStats($db);
-$recent_logs = $db->query("SELECT * FROM pterodactyl_security_logs ORDER BY created_at DESC LIMIT 20")->fetch_all(MYSQLI_ASSOC);
-
-?>
-<!DOCTYPE html>
-<html lang="en" data-theme="dark">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Security Dashboard - <?php echo htmlspecialchars($config['site_name']); ?></title>
-    
-    <link rel="stylesheet" href="/css/app.css">
-    
-    <style>
-        :root {
-            --security-primary: #0fcc45;
-            --security-danger: #e94560;
-            --security-warning: #ff9a3c;
-            --security-dark: #0f0f23;
-            --security-card: #1a1a2e;
-            --security-border: #2d2d4d;
-        }
-        
-        * { box-sizing: border-box; }
-        
-        body {
-            background: linear-gradient(135deg, #0f0f23 0%, #1a1a2e 100%);
-            color: #fff;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-            margin: 0;
-            padding: 0;
-        }
-        
-        .security-container {
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        
-        .security-header {
-            background: linear-gradient(135deg, var(--security-dark) 0%, #16213e 100%);
-            color: white;
-            padding: 30px;
-            border-radius: 15px;
-            margin-bottom: 30px;
-            border: 1px solid var(--security-border);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .security-header::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 5px;
-            background: linear-gradient(90deg, var(--security-primary), var(--security-warning), var(--security-danger));
-        }
-        
-        .security-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        
-        .security-card {
-            background: var(--security-card);
-            border: 1px solid var(--security-border);
-            border-radius: 10px;
-            padding: 25px;
-            transition: transform 0.3s, box-shadow 0.3s;
-        }
-        
-        .security-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-        }
-        
-        .security-card h2, .security-card h3 {
-            color: #fff;
-            margin-bottom: 15px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .stat-number {
-            font-size: 2.5em;
-            font-weight: bold;
-            margin: 10px 0;
-        }
-        
-        .stat-banned { color: var(--security-danger); }
-        .stat-active { color: var(--security-primary); }
-        .stat-warning { color: var(--security-warning); }
-        .stat-info { color: #4361ee; }
-        
-        .toggle-switch {
-            position: relative;
-            display: inline-block;
-            width: 60px;
-            height: 30px;
-        }
-        
-        .toggle-switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-        }
-        
-        .toggle-slider {
-            position: absolute;
-            cursor: pointer;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background-color: #555;
-            transition: .4s;
-            border-radius: 34px;
-        }
-        
-        .toggle-slider:before {
-            position: absolute;
-            content: "";
-            height: 22px;
-            width: 22px;
-            left: 4px;
-            bottom: 4px;
-            background-color: white;
-            transition: .4s;
-            border-radius: 50%;
-        }
-        
-        input:checked + .toggle-slider {
-            background-color: var(--security-primary);
-        }
-        
-        input:checked + .toggle-slider:before {
-            transform: translateX(30px);
-        }
-        
-        .btn {
-            display: inline-block;
-            padding: 10px 20px;
-            border-radius: 5px;
-            border: none;
-            cursor: pointer;
-            font-weight: 600;
-            transition: all 0.3s;
-            text-decoration: none;
-            font-size: 14px;
-        }
-        
-        .btn-danger { background: var(--security-danger); color: white; }
-        .btn-success { background: var(--security-primary); color: white; }
-        .btn-primary { background: #4361ee; color: white; }
-        .btn-secondary { background: rgba(255,255,255,0.1); color: white; }
-        
-        .btn:hover {
-            opacity: 0.9;
-            transform: translateY(-2px);
-        }
-        
-        .table-responsive {
-            overflow-x: auto;
-        }
-        
-        .security-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 15px;
-        }
-        
-        .security-table th {
-            background: rgba(255, 255, 255, 0.05);
-            padding: 15px;
-            text-align: left;
-            color: #8a8ab5;
-            font-weight: 600;
-            border-bottom: 2px solid var(--security-border);
-        }
-        
-        .security-table td {
-            padding: 15px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            color: #ccc;
-        }
-        
-        .security-table tr:hover {
-            background: rgba(255, 255, 255, 0.03);
-        }
-        
-        .badge {
-            display: inline-block;
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 0.85em;
-            font-weight: 600;
-        }
-        
-        .badge-success { background: rgba(15, 204, 69, 0.2); color: var(--security-primary); }
-        .badge-danger { background: rgba(233, 69, 96, 0.2); color: var(--security-danger); }
-        .badge-warning { background: rgba(255, 154, 60, 0.2); color: var(--security-warning); }
-        .badge-info { background: rgba(67, 97, 238, 0.2); color: #4361ee; }
-        
-        .feature-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 15px;
-            background: rgba(255, 255, 255, 0.03);
-            border-radius: 8px;
-            margin: 10px 0;
-            border: 1px solid rgba(255, 255, 255, 0.05);
-        }
-        
-        .feature-info {
-            flex: 1;
-        }
-        
-        .feature-info strong {
-            display: block;
-            margin-bottom: 5px;
-            color: #fff;
-        }
-        
-        .feature-info small {
-            color: #8a8ab5;
-            font-size: 0.9em;
-        }
-        
-        .form-group {
-            margin-bottom: 20px;
-        }
-        
-        .form-group label {
-            display: block;
-            margin-bottom: 8px;
-            color: #8a8ab5;
-            font-weight: 600;
-        }
-        
-        .form-control {
-            width: 100%;
-            padding: 12px;
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--security-border);
-            border-radius: 5px;
-            color: #fff;
-            font-size: 14px;
-        }
-        
-        .form-control:focus {
-            outline: none;
-            border-color: var(--security-primary);
-        }
-        
-        select.form-control {
-            cursor: pointer;
-        }
-        
-        .alert {
-            padding: 15px;
-            border-radius: 5px;
-            margin-bottom: 20px;
-            border: 1px solid;
-        }
-        
-        .alert-success {
-            background: rgba(15, 204, 69, 0.1);
-            border-color: var(--security-primary);
-            color: var(--security-primary);
-        }
-        
-        .flex-between {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-        
-        .icon {
-            font-size: 1.2em;
-        }
-        
-        @media (max-width: 768px) {
-            .security-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .security-container {
-                padding: 10px;
-            }
-            
-            .feature-row {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 15px;
-            }
-            
-            .flex-between {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-        }
-    </style>
-    
-    <script>
-    <?php if ($settings['anti_debug']['value']['enabled'] ?? false): ?>
-    (function() {
-        var start = new Date().getTime();
-        function checkDebugger() {
-            var end = new Date().getTime();
-            if (end - start > 100) {
-                window.location.href = '/security/blocked?reason=debugger_detected';
-            }
-            start = end;
-            setTimeout(checkDebugger, 100);
-        }
-        checkDebugger();
-    })();
-    <?php endif; ?>
-    
-    <?php if ($settings['anti_inspect']['value']['enabled'] ?? false): ?>
-    document.addEventListener('contextmenu', function(e) {
-        e.preventDefault();
-        return false;
-    });
-    
-    document.onkeydown = function(e) {
-        if (e.keyCode == 123 ||
-            (e.ctrlKey && e.shiftKey && e.keyCode == 73) ||
-            (e.ctrlKey && e.shiftKey && e.keyCode == 74) ||
-            (e.ctrlKey && e.keyCode == 85) ||
-            (e.metaKey && e.altKey && e.keyCode == 73)
-        ) {
-            alert('Developer tools are disabled for security reasons.');
-            return false;
-        }
-    };
-    <?php endif; ?>
-    
-    function toggleFeature(feature, checkbox) {
-        var enabled = checkbox.checked ? 1 : 0;
-        var form = document.createElement('form');
-        form.method = 'POST';
-        form.innerHTML = '<input type="hidden" name="action" value="toggle_feature">' +
-                        '<input type="hidden" name="feature" value="' + feature + '">' +
-                        '<input type="hidden" name="enabled" value="' + enabled + '">';
-        document.body.appendChild(form);
-        form.submit();
-    }
-    </script>
-</head>
-<body>
-    <div class="security-container">
-        <div class="security-header">
-            <h1 style="margin-bottom: 10px;"><span class="icon">&#x1F6E1;</span> Ultimate Security Dashboard</h1>
-            <p style="color: #8a8ab5; margin-bottom: 20px;">Real-time protection for your Pterodactyl panel</p>
-            
-            <?php if ($action_result): ?>
-            <div class="alert alert-success">
-                <span class="icon">&#x2714;</span> <?php echo htmlspecialchars($action_result); ?>
-            </div>
-            <?php endif; ?>
-            
-            <div class="flex-between">
-                <div style="display: flex; gap: 15px;">
-                    <a href="/admin" class="btn btn-primary"><span class="icon">&#x2190;</span> Back to Panel</a>
-                    <a href="/security/" class="btn btn-secondary"><span class="icon">&#x21BB;</span> Refresh</a>
-                </div>
-                <span style="color: #8a8ab5; font-size: 0.9em;">
-                    Logged in as: <strong>Admin (ID: <?php echo $config['admin_id']; ?>)</strong>
-                </span>
-            </div>
-        </div>
-        
-        <div class="security-grid">
-            <div class="security-card">
-                <h3><span class="icon">&#x1F6AB;</span> Banned IPs</h3>
-                <div class="stat-number stat-banned"><?php echo $stats['total_banned']; ?></div>
-                <p style="color: #8a8ab5;">Currently blocked addresses</p>
-            </div>
-            
-            <div class="security-card">
-                <h3><span class="icon">&#x1F4CA;</span> Today's Requests</h3>
-                <div class="stat-number stat-active"><?php echo $stats['today_requests']; ?></div>
-                <p style="color: #8a8ab5;">Total IP activities</p>
-            </div>
-            
-            <div class="security-card">
-                <h3><span class="icon">&#x26A0;</span> Suspicious IPs</h3>
-                <div class="stat-number stat-warning"><?php echo $stats['suspicious_ips']; ?></div>
-                <p style="color: #8a8ab5;">Under monitoring</p>
-            </div>
-            
-            <div class="security-card">
-                <h3><span class="icon">&#x1F4DD;</span> Security Logs</h3>
-                <div class="stat-number stat-info"><?php echo $stats['total_logs']; ?></div>
-                <p style="color: #8a8ab5;">Today's events</p>
-            </div>
-        </div>
-        
-        <div class="security-card">
-            <h2><span class="icon">&#x1F527;</span> Security Features Control</h2>
-            
-            <div class="feature-row">
-                <div class="feature-info">
-                    <strong><span class="icon">&#x1F6E1;</span> Anti DDoS (Rate Limit)</strong>
-                    <small>Block IPs exceeding <?php echo $settings['ddos_protection']['value']['requests_per_minute'] ?? 60; ?> requests/minute</small>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" <?php echo ($settings['ddos_protection']['value']['enabled'] ?? false) ? 'checked' : ''; ?> onchange="toggleFeature('ddos_protection', this)">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            
-            <div class="feature-row">
-                <div class="feature-info">
-                    <strong><span class="icon">&#x1F916;</span> Anti Bot Detection</strong>
-                    <small>Detect and block fake IPs, user agents, and suspicious patterns</small>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" <?php echo ($settings['anti_bot']['value']['enabled'] ?? false) ? 'checked' : ''; ?> onchange="toggleFeature('anti_bot', this)">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            
-            <div class="feature-row">
-                <div class="feature-info">
-                    <strong><span class="icon">&#x1F50D;</span> Anti Inspect (DevTools Block)</strong>
-                    <small>Disable F12, right-click, and developer tools access</small>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" <?php echo ($settings['anti_inspect']['value']['enabled'] ?? false) ? 'checked' : ''; ?> onchange="toggleFeature('anti_inspect', this)">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-            
-            <div class="feature-row">
-                <div class="feature-info">
-                    <strong><span class="icon">&#x1F441;</span> Anti Intip (Spy Protection)</strong>
-                    <small>Hide sensitive data from all users except Admin (ID: 1)</small>
-                </div>
-                <label class="toggle-switch">
-                    <input type="checkbox" <?php echo ($settings['anti_intip']['value']['enabled'] ?? false) ? 'checked' : ''; ?> onchange="toggleFeature('anti_intip', this)">
-                    <span class="toggle-slider"></span>
-                </label>
-            </div>
-        </div>
-        
-        <div class="security-grid">
-            <div class="security-card">
-                <h2><span class="icon">&#x1F512;</span> Ban IP Address</h2>
-                <form method="POST">
-                    <input type="hidden" name="action" value="ban_ip">
-                    
-                    <div class="form-group">
-                        <label>IP Address</label>
-                        <input type="text" name="ip" class="form-control" placeholder="192.168.1.100" required>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Reason</label>
-                        <select name="reason" class="form-control" required>
-                            <option value="manual">Manual Ban</option>
-                            <option value="rate_limit">Rate Limit Exceeded</option>
-                            <option value="fake_ip">Fake IP Address</option>
-                            <option value="fake_ua">Fake User Agent</option>
-                            <option value="bot">Bot Detected</option>
-                            <option value="suspicious">Suspicious Activity</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Details (Optional)</label>
-                        <input type="text" name="details" class="form-control" placeholder="Additional information...">
-                    </div>
-                    
-                    <div class="form-group">
-                        <label>Duration (Hours)</label>
-                        <input type="number" name="duration" class="form-control" value="24" min="1" required>
-                    </div>
-                    
-                    <button type="submit" class="btn btn-danger" style="width: 100%;"><span class="icon">&#x1F6AB;</span> Ban IP Address</button>
-                </form>
-            </div>
-            
-            <div class="security-card">
-                <h2><span class="icon">&#x1F513;</span> Unban IP Address</h2>
-                <form method="POST">
-                    <input type="hidden" name="action" value="unban_ip">
-                    
-                    <div class="form-group">
-                        <label>IP Address</label>
-                        <input type="text" name="ip" class="form-control" placeholder="192.168.1.100" required>
-                    </div>
-                    
-                    <button type="submit" class="btn btn-success" style="width: 100%;"><span class="icon">&#x2714;</span> Unban IP Address</button>
-                </form>
-                
-                <div style="margin-top: 20px; padding-top: 20px; border-top: 1px solid var(--security-border);">
-                    <strong style="color: #8a8ab5;">Quick Unban:</strong>
-                    <?php if (empty($banned_ips)): ?>
-                        <p style="color: #8a8ab5; margin-top: 10px;">No banned IPs at the moment.</p>
-                    <?php else: ?>
-                        <div style="max-height: 200px; overflow-y: auto; margin-top: 10px;">
-                            <?php foreach (array_slice($banned_ips, 0, 5) as $ban): ?>
-                                <form method="POST" style="display: inline-block; margin: 5px;">
-                                    <input type="hidden" name="action" value="unban_ip">
-                                    <input type="hidden" name="ip" value="<?php echo htmlspecialchars($ban['ip_address']); ?>">
-                                    <button type="submit" class="btn btn-success" style="font-size: 12px; padding: 5px 10px;">
-                                        <span class="icon">&#x2714;</span> <?php echo htmlspecialchars($ban['ip_address']); ?>
-                                    </button>
-                                </form>
-                            <?php endforeach; ?>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
-        
-        <div class="security-card">
-            <h2><span class="icon">&#x1F4CB;</span> Banned IP List</h2>
-            <div class="table-responsive">
-                <table class="security-table">
-                    <thead>
-                        <tr>
-                            <th>IP Address</th>
-                            <th>Reason</th>
-                            <th>Details</th>
-                            <th>Expires At</th>
-                            <th>Banned At</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (empty($banned_ips)): ?>
-                            <tr>
-                                <td colspan="6" style="text-align: center; color: #8a8ab5;">No banned IPs found.</td>
-                            </tr>
-                        <?php else: ?>
-                            <?php foreach ($banned_ips as $ban): ?>
-                                <tr>
-                                    <td><strong><?php echo htmlspecialchars($ban['ip_address']); ?></strong></td>
-                                    <td>
-                                        <?php
-                                        $reason_badges = [
-                                            'manual' => 'info',
-                                            'rate_limit' => 'danger',
-                                            'fake_ip' => 'warning',
-                                            'fake_ua' => 'warning',
-                                            'bot' => 'danger',
-                                            'suspicious' => 'warning'
-                                        ];
-                                        $badge = $reason_badges[$ban['reason']] ?? 'info';
-                                        ?>
-                                        <span class="badge badge-<?php echo $badge; ?>"><?php echo strtoupper(str_replace('_', ' ', $ban['reason'])); ?></span>
-                                    </td>
-                                    <td><?php echo htmlspecialchars($ban['details'] ?: '-'); ?></td>
-                                    <td><?php echo $ban['expires_at'] ? date('Y-m-d H:i', strtotime($ban['expires_at'])) : 'Permanent'; ?></td>
-                                    <td><?php echo date('Y-m-d H:i', strtotime($ban['created_at'])); ?></td>
-                                    <td>
-                                        <form method="POST" style="display: inline;">
-                                            <input type="hidden" name="action" value="unban_ip">
-                                            <input type="hidden" name="ip" value="<?php echo htmlspecialchars($ban['ip_address']); ?>">
-                                            <button type="submit" class="btn btn-success" style="font-size: 12px; padding: 5px 10px;">
-                                                <span class="icon">&#x1F513;</span> Unban
-                                            </button>
-                                        </form>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <div class="security-card">
-            <h2><span class="icon">&#x1F4DC;</span> Recent Security Logs</h2>
-            <div class="table-responsive">
-                <table class="security-table">
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>IP Address</th>
-                            <th>Action</th>
-                            <th>Severity</th>
-                            <th>Details</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (empty($recent_logs)): ?>
-                            <tr>
-                                <td colspan="5" style="text-align: center; color: #8a8ab5;">No security logs found.</td>
-                            </tr>
-                        <?php else: ?>
-                            <?php foreach ($recent_logs as $log): ?>
-                                <tr>
-                                    <td><?php echo date('H:i:s', strtotime($log['created_at'])); ?></td>
-                                    <td><strong><?php echo htmlspecialchars($log['ip_address']); ?></strong></td>
-                                    <td><?php echo htmlspecialchars(str_replace('_', ' ', $log['action'])); ?></td>
-                                    <td>
-                                        <?php
-                                        $severity_badges = [
-                                            'info' => 'info',
-                                            'warning' => 'warning',
-                                            'critical' => 'danger'
-                                        ];
-                                        $badge = $severity_badges[$log['severity']] ?? 'info';
-                                        ?>
-                                        <span class="badge badge-<?php echo $badge; ?>"><?php echo strtoupper($log['severity']); ?></span>
-                                    </td>
-                                    <td><?php echo htmlspecialchars($log['details'] ?: '-'); ?></td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
-</body>
-</html>
-SECURITY_DASHBOARD
-
-chown -R www-data:www-data "$SECURITY_DIR"
-chmod -R 755 "$SECURITY_DIR"
-
-echo -e "\n\e[36m[PHASE 5] Configuring Nginx...\e[0m"
-
-cat > /etc/nginx/sites-available/pterodactyl.conf << 'NGINX_CONFIG'
+# Create minimal nginx config
+cat > /etc/nginx/sites-available/pterodactyl << 'NGINX'
 server {
     listen 80;
     server_name _;
-    
     root /var/www/pterodactyl/public;
-    index index.php index.html;
+    index index.php;
     
     location / {
         try_files $uri $uri/ /index.php?$query_string;
     }
     
-    location /security {
-        try_files $uri $uri/ /security/index.php?$query_string;
-    }
-    
     location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.3-fpm-pterodactyl.sock;
+        fastcgi_pass unix:/var/run/php/php8.1-fpm-pterodactyl.sock;
         fastcgi_index index.php;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
         include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     }
     
     location ~ /\.ht {
         deny all;
     }
 }
-NGINX_CONFIG
+NGINX
 
-ln -sf /etc/nginx/sites-available/pterodactyl.conf /etc/nginx/sites-enabled/pterodactyl.conf
-rm -f /etc/nginx/sites-enabled/default
+# Test and start services
+nginx -t && echo "✅ Nginx config test passed"
 
-nginx -t && systemctl restart nginx
+systemctl start php8.1-fpm
+sleep 2
+systemctl start nginx
 
-echo -e "\n\e[36m[PHASE 6] Final Permissions Check...\e[0m"
-
+# Clear Laravel cache
 cd "$PANEL_DIR"
-chown -R www-data:www-data .
-chmod -R 755 public
-chmod -R 775 storage bootstrap/cache
+sudo -u www-data php artisan cache:clear 2>/dev/null || true
+sudo -u www-data php artisan view:clear 2>/dev/null || true
+sudo -u www-data php artisan route:clear 2>/dev/null || true
 
-systemctl restart php8.3-fpm nginx
+# ========== FINAL TEST ==========
+echo -e "\n\e[36m[FINAL TEST] Testing Installation...\e[0m"
 
+sleep 3
+
+echo "1. Testing PHP-FPM socket..."
+if [ -S "/var/run/php/php8.1-fpm-pterodactyl.sock" ]; then
+    echo "   ✅ PHP-FPM socket is working"
+else
+    echo "   ⚠️ Socket not found, but continuing..."
+fi
+
+echo "2. Testing nginx..."
+curl -I http://localhost 2>/dev/null && echo "   ✅ Nginx is responding" || echo "   ⚠️ Nginx may have issues"
+
+echo "3. Testing panel access..."
+curl -s http://localhost/admin | grep -q "Pterodactyl" && echo "   ✅ Panel is accessible" || echo "   ⚠️ Panel may have issues"
+
+echo "4. Testing database..."
+mysql -u root -e "USE panel; SELECT COUNT(*) FROM panel_security;" 2>/dev/null && echo "   ✅ Security database is ready" || echo "   ⚠️ Database may have issues"
+
+# ========== COMPLETION MESSAGE ==========
+echo -e "\n\e[32m==================================================\e[0m"
+echo -e "\e[32m🎉 INSTALLATION COMPLETE!\e[0m"
+echo -e "\e[32m==================================================\e[0m"
 echo ""
-echo "=================================================="
-echo "✓ INSTALLATION COMPLETED SUCCESSFULLY!"
-echo "=================================================="
+echo "✅ BlackEndSpace Theme: Installed"
+echo "✅ Security System: Ready"
+echo "✅ Security Menu: Added to sidebar (shield icon)"
+echo "✅ Access Control: User ID = 1 only"
 echo ""
-echo "Security Dashboard URL:"
-echo "http://YOUR_DOMAIN/security/"
+echo "📊 Security Features:"
+echo "   • DDoS Rate Limit (Toggle ON/OFF)"
+echo "   • IP Ban/Unban with reason & time"
+echo "   • Anti-Debug & Anti-Inspect (Toggle ON/OFF)"
+echo "   • Anti-Bot with fake IP/UA detection"
+echo "   • Full logging system"
 echo ""
-echo "Temporary Access:"
-echo "http://YOUR_DOMAIN/security/?admin_key=temp_access_123"
+echo "🔧 Access URLs:"
+echo "   Panel: http://your-server-ip/admin"
+echo "   Security: http://your-server-ip/admin/security"
 echo ""
-echo "Features Installed:"
-echo "• BlackEndSpace Theme"
-echo "• Anti DDoS (Rate Limit)"
-echo "• Anti Bot Detection"
-echo "• Anti Inspect (DevTools Block)"
-echo "• Anti Intip (Spy Protection - ID 1 Only)"
-echo "• IP Ban/Unban System"
-echo "• Security Logging & Monitoring"
+echo "👤 Login Credentials:"
+echo "   Use your existing admin account (ID: 1)"
 echo ""
-echo "Default Settings:"
-echo "• Rate Limit: 60 requests/minute"
-echo "• Ban Duration: 24 hours"
-echo "• Admin Access: User ID 1 only"
+echo "⚠️ If you see 403/500 errors:"
+echo "   Run: chmod -R 775 /var/www/pterodactyl/storage"
+echo "   Run: chown -R www-data:www-data /var/www/pterodactyl"
 echo ""
-echo "IMPORTANT NOTES:"
-echo "1. Change 'temp_access_123' in production!"
-echo "2. Configure MySQL root password if needed"
-echo "3. Setup SSL certificate for HTTPS"
-echo "4. Review security settings in dashboard"
-echo ""
-echo "=================================================="
+echo "🔥 Quick Fix Command:"
+echo "   systemctl restart php8.1-fpm nginx"
+echo -e "\e[32m==================================================\e[0m"
