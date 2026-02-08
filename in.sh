@@ -17,8 +17,8 @@ echo "=================================================="
 DOMAIN="zerrovvv.srv-cloud.biz.id"        # SUDAH DIUBAH
 EMAIL="admin@google.com"                  # SUDAH DIUBAH
 PANEL_DIR="/var/www/pterodactyl"
-MYSQL_ROOT_PASS=$(openssl rand -base64 32)
-MYSQL_PANEL_PASS=$(openssl rand -base64 32)
+MYSQL_ROOT_PASS=123
+MYSQL_PANEL_PASS=123
 THEME_URL="https://github.com/reviactyl/panel/archive/refs/heads/main.zip"
 ADMIN_ID=1
 
