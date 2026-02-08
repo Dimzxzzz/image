@@ -17,8 +17,8 @@ echo "=================================================="
 DOMAIN="zerrovvv.srv-cloud.biz.id"        # SUDAH DIUBAH
 EMAIL="admin@google.com"                  # SUDAH DIUBAH
 PANEL_DIR="/var/www/pterodactyl"
-MYSQL_ROOT_PASS=123
-MYSQL_PANEL_PASS=123
+MYSQL_ROOT_PASS="123"
+MYSQL_PANEL_PASS="123"
 THEME_URL="https://github.com/reviactyl/panel/archive/refs/heads/main.zip"
 ADMIN_ID=1
 
@@ -150,14 +150,18 @@ configure_mysql() {
     systemctl enable mariadb
     
     # Secure installation
-    mysql <<EOF
+        # Bagian Secure Installation
+    mysql -u root -p${MYSQL_ROOT_PASS} <<EOF
 DELETE FROM mysql.user WHERE User='';
-DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
-DROP DATABASE IF EXISTS test;
-DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
-FLUSH PRIVILEGES;
+...
 EOF
     
+    # Bagian Create Database
+    mysql -u root -p${MYSQL_ROOT_PASS} <<EOF
+CREATE USER IF NOT EXISTS 'pterodactyl'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
+...
+EOF
+
     # Create database untuk panel - FIX LOCALHOST ACCESS
     mysql <<EOF
 CREATE USER IF NOT EXISTS 'pterodactyl'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
