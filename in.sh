@@ -565,9 +565,9 @@ create_security_menu() {
     # Backup original
     cp "$ADMIN_LAYOUT" "$ADMIN_LAYOUT.backup.$(date +%s)"
     
-    # Create security menu HTML dengan icon FontAwesome
+    # Create security menu HTML
     SECURITY_MENU='@if(auth()->check() && auth()->user()->id == 1)
-    <li class="treeview {{ Request::is(\'admin/security*\') ? \'active\' : \'\' }}">
+    <li class="treeview {{ Request::is('"'"admin/security*"'"') ? '"'"active"'"' : '"''"' }}">
         <a href="#">
             <i class="fa fa-shield"></i>
             <span>Security System</span>
@@ -576,58 +576,58 @@ create_security_menu() {
             </span>
         </a>
         <ul class="treeview-menu">
-            <li class="{{ Request::is(\'admin/security/dashboard\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.dashboard\') }}">
+            <li class="{{ Request::is('"'"admin/security/dashboard"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.dashboard"'"') }}">
                     <i class="fa fa-dashboard"></i> <span>Dashboard</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/ips*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.ips\') }}">
+            <li class="{{ Request::is('"'"admin/security/ips*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.ips"'"') }}">
                     <i class="fa fa-network-wired"></i> <span>IP Management</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/ddos*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.ddos\') }}">
+            <li class="{{ Request::is('"'"admin/security/ddos*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.ddos"'"') }}">
                     <i class="fa fa-bolt"></i> <span>DDoS Protection</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/bot*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.bot\') }}">
+            <li class="{{ Request::is('"'"admin/security/bot*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.bot"'"') }}">
                     <i class="fa fa-robot"></i> <span>Anti-Bot</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/debug*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.debug\') }}">
+            <li class="{{ Request::is('"'"admin/security/debug*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.debug"'"') }}">
                     <i class="fa fa-bug"></i> <span>Anti-Debug/Inspect</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/advanced*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.advanced\') }}">
+            <li class="{{ Request::is('"'"admin/security/advanced*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.advanced"'"') }}">
                     <i class="fa fa-cogs"></i> <span>Advanced Protection</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/database*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.database\') }}">
+            <li class="{{ Request::is('"'"admin/security/database*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.database"'"') }}">
                     <i class="fa fa-database"></i> <span>Database Security</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/session*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.session\') }}">
+            <li class="{{ Request::is('"'"admin/security/session*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.session"'"') }}">
                     <i class="fa fa-user-shield"></i> <span>Session Security</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/api*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.api\') }}">
+            <li class="{{ Request::is('"'"admin/security/api*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.api"'"') }}">
                     <i class="fa fa-key"></i> <span>API Security</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/logs*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.logs\') }}">
+            <li class="{{ Request::is('"'"admin/security/logs*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.logs"'"') }}">
                     <i class="fa fa-history"></i> <span>Security Logs</span>
                 </a>
             </li>
-            <li class="{{ Request::is(\'admin/security/settings*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.settings\') }}">
+            <li class="{{ Request::is('"'"admin/security/settings*"'"') ? '"'"active"'"' : '"''"' }}">
+                <a href="{{ route('"'"admin.security.settings"'"') }}">
                     <i class="fa fa-sliders-h"></i> <span>Settings</span>
                 </a>
             </li>
@@ -637,11 +637,11 @@ create_security_menu() {
     
     # Insert after Service Management section
     if grep -q "Service Management" "$ADMIN_LAYOUT"; then
-        sed -i '/<h3>Service Management<\/h3>/a\\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
+        sed -i '/<h3>Service Management<\/h3>/a\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
         log_success "Menu Security ditambahkan di bawah Service Management"
     else
         # Add before closing sidebar section
-        sed -i '/<\/ul>[[:space:]]*<\/section>/i\\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
+        sed -i '/<\/ul>[[:space:]]*<\/section>/i\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
         log_success "Menu Security ditambahkan di sidebar"
     fi
 }
@@ -867,7 +867,7 @@ create_security_views() {
     SECURITY_VIEWS_DIR="$PANEL_DIR/resources/views/admin/security"
     mkdir -p "$SECURITY_VIEWS_DIR"
     
-    # Create dashboard view dengan toggle switches
+    # Create dashboard view
     cat > "$SECURITY_VIEWS_DIR/dashboard.blade.php" << 'VIEW'
 @extends('layouts.admin')
 
@@ -942,7 +942,7 @@ create_security_views() {
                         <div class="small-box bg-aqua">
                             <div class="inner">
                                 <h3>{{ $stats['today_logs'] }}</h3>
-                                <p>Today's Events</p>
+                                <p>Today'\''s Events</p>
                             </div>
                             <div class="icon">
                                 <i class="fa fa-history"></i>
@@ -975,7 +975,7 @@ create_security_views() {
                                         <tbody>
                                             @foreach($recent_logs as $log)
                                             <tr>
-                                                <td>{{ $log->created_at->diffForHumans() }}</td>
+                                                <td>{{ \Carbon\Carbon::parse($log->created_at)->diffForHumans() }}</td>
                                                 <td><code>{{ $log->ip_address }}</code></td>
                                                 <td>{{ ucwords(str_replace('_', ' ', $log->action)) }}</td>
                                                 <td>
@@ -1100,7 +1100,7 @@ create_security_views() {
 @endsection
 VIEW
     
-    # Create settings view dengan toggle switches
+    # Create settings view
     cat > "$SECURITY_VIEWS_DIR/settings.blade.php" << 'VIEW'
 @extends('layouts.admin')
 
@@ -1306,8 +1306,183 @@ VIEW
 @endsection
 VIEW
     
-    # Create views sederhana untuk menu lainnya
-    for view in ips ddos bot debug advanced database session api logs; do
+    # Create other views
+    cat > "$SECURITY_VIEWS_DIR/ips.blade.php" << 'VIEW'
+@extends('layouts.admin')
+
+@section('title')
+    Security - IP Management
+@endsection
+
+@section('content-header')
+    <h1>IP Management<small>Monitor and control IP addresses</small></h1>
+    <ol class="breadcrumb">
+        <li><a href="{{ route('admin.index') }}">Admin</a></li>
+        <li><a href="{{ route('admin.security.dashboard') }}">Security</a></li>
+        <li class="active">IP Management</li>
+    </ol>
+@endsection
+
+@section('content')
+<div class="row">
+    <div class="col-md-12">
+        <div class="box box-warning">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-network-wired"></i> IP Address Management</h3>
+                <div class="box-tools">
+                    <button type="button" class="btn btn-success btn-sm" data-toggle="modal" data-target="#banModal">
+                        <i class="fa fa-ban"></i> Ban IP
+                    </button>
+                </div>
+            </div>
+            <div class="box-body">
+                <div class="row">
+                    <div class="col-md-3 col-sm-6">
+                        <div class="info-box">
+                            <span class="info-box-icon bg-aqua"><i class="fa fa-list"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Total IPs</span>
+                                <span class="info-box-number">{{ $stats['total'] }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-sm-6">
+                        <div class="info-box">
+                            <span class="info-box-icon bg-red"><i class="fa fa-ban"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Banned IPs</span>
+                                <span class="info-box-number">{{ $stats['banned'] }}</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-3 col-sm-6">
+                        <div class="info-box">
+                            <span class="info-box-icon bg-yellow"><i class="fa fa-exclamation-triangle"></i></span>
+                            <div class="info-box-content">
+                                <span class="info-box-text">Suspicious IPs</span>
+                                <span class="info-box-number">{{ $stats['suspicious'] }}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="table-responsive">
+                    <table class="table table-hover">
+                        <thead>
+                            <tr>
+                                <th>IP Address</th>
+                                <th>Threat Score</th>
+                                <th>Status</th>
+                                <th>Requests</th>
+                                <th>Last Request</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach($ips as $ip)
+                            <tr>
+                                <td><code>{{ $ip->ip_address }}</code></td>
+                                <td>
+                                    <div class="progress progress-xs">
+                                        <div class="progress-bar progress-bar-{{ $ip->threat_score > 80 ? 'danger' : ($ip->threat_score > 50 ? 'warning' : 'success') }}" 
+                                             style="width: {{ $ip->threat_score }}%"></div>
+                                    </div>
+                                    <span class="badge bg-{{ $ip->threat_score > 80 ? 'red' : ($ip->threat_score > 50 ? 'yellow' : 'green') }}">{{ $ip->threat_score }}</span>
+                                </td>
+                                <td>
+                                    @if($ip->status == 'banned')
+                                    <span class="label label-danger">Banned</span>
+                                    @elseif($ip->status == 'suspicious')
+                                    <span class="label label-warning">Suspicious</span>
+                                    @elseif($ip->status == 'whitelist')
+                                    <span class="label label-success">Whitelisted</span>
+                                    @else
+                                    <span class="label label-info">Active</span>
+                                    @endif
+                                </td>
+                                <td>{{ $ip->request_count }}</td>
+                                <td>{{ $ip->last_request ? \Carbon\Carbon::parse($ip->last_request)->diffForHumans() : 'Never' }}</td>
+                                <td>
+                                    @if($ip->status != 'banned')
+                                    <button class="btn btn-xs btn-danger ban-ip-btn" data-ip="{{ $ip->ip_address }}">
+                                        <i class="fa fa-ban"></i> Ban
+                                    </button>
+                                    @else
+                                    <button class="btn btn-xs btn-success unban-ip-btn" data-ip="{{ $ip->ip_address }}">
+                                        <i class="fa fa-check"></i> Unban
+                                    </button>
+                                    @endif
+                                </td>
+                            </tr>
+                            @endforeach
+                        </tbody>
+                    </table>
+                </div>
+                
+                <div class="text-center">
+                    {{ $ips->links() }}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ban IP Modal -->
+<div class="modal fade" id="banModal" tabindex="-1" role="dialog">
+    <div class="modal-dialog" role="document">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                    <span aria-hidden="true">&times;</span>
+                </button>
+                <h4 class="modal-title"><i class="fa fa-ban"></i> Ban IP Address</h4>
+            </div>
+            <form action="{{ route('admin.security.ban') }}" method="POST">
+                @csrf
+                <div class="modal-body">
+                    <div class="form-group">
+                        <label for="ip">IP Address</label>
+                        <input type="text" class="form-control" name="ip" placeholder="e.g., 192.168.1.1" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="reason">Reason</label>
+                        <select class="form-control" name="reason" required>
+                            <option value="manual">Manual Ban</option>
+                            <option value="rate_limit">Rate Limit Exceeded</option>
+                            <option value="bot">Bot Detected</option>
+                            <option value="suspicious">Suspicious Activity</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="duration">Duration (hours)</label>
+                        <input type="number" class="form-control" name="duration" value="24" min="1" max="720" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Ban IP</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+@endsection
+
+@section('footer-scripts')
+<script>
+$(document).ready(function() {
+    $('.ban-ip-btn').click(function() {
+        var ip = $(this).data('ip');
+        $('#banModal input[name="ip"]').val(ip);
+        $('#banModal').modal('show');
+    });
+});
+</script>
+@endsection
+VIEW
+    
+    # Create other simple views
+    for view in ddos bot debug advanced database session api logs; do
         cat > "$SECURITY_VIEWS_DIR/$view.blade.php" << VIEW
 @extends('layouts.admin')
 
@@ -1328,19 +1503,18 @@ VIEW
 <div class="row">
     <div class="col-md-12">
         <div class="box box-{{ 
-            view == 'ips' ? 'warning' : 
             view == 'ddos' ? 'danger' : 
             view == 'bot' ? 'info' : 
             view == 'debug' ? 'default' : 
             view == 'advanced' ? 'success' : 
             view == 'database' ? 'purple' : 
             view == 'session' ? 'primary' : 
-            view == 'api' ? 'maroon' : 'default' 
+            view == 'api' ? 'maroon' : 
+            'default' 
         }}">
             <div class="box-header with-border">
                 <h3 class="box-title">
                     <i class="fa fa-{{ 
-                        view == 'ips' ? 'network-wired' : 
                         view == 'ddos' ? 'bolt' : 
                         view == 'bot' ? 'robot' : 
                         view == 'debug' ? 'bug' : 
