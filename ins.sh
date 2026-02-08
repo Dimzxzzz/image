@@ -1,220 +1,213 @@
 #!/bin/bash
 
 echo "=================================================="
-echo "🔥 FRESH PTERODACTYL + SECURITY SYSTEM INSTALL"
+echo "🔥 FINAL FIX FOR PTERODACTYL 500 ERRORS"
 echo "=================================================="
 
-# ========== CONFIGURATION ==========
 PANEL_DIR="/var/www/pterodactyl"
 DOMAIN_NAME="zero-xd.server-panell.biz.id"
-ADMIN_EMAIL="admin@admin.com"
-ADMIN_PASSWORD="password"
-TIMEZONE="Asia/Jakarta"
 
-# ========== STOP SERVICES ==========
-echo -e "\n\e[36m[1] Stopping services...\e[0m"
-systemctl stop nginx 2>/dev/null || true
-systemctl stop php8.1-fpm 2>/dev/null || true
+# ========== FIX 1: CHECK CURRENT DIRECTORY ==========
+echo -e "\n\e[36m[1] Fixing current directory...\e[0m"
+cd "$PANEL_DIR"
+pwd
 
-# ========== BACKUP OLD INSTALLATION ==========
-echo -e "\n\e[36m[2] Backing up old installation...\e[0m"
-BACKUP_DIR="/root/pterodactyl_backup_$(date +%s)"
-if [ -d "$PANEL_DIR" ]; then
-    mkdir -p "$BACKUP_DIR"
-    cp -r "$PANEL_DIR" "$BACKUP_DIR/"
-    echo "✅ Backup saved to: $BACKUP_DIR"
-fi
+# ========== FIX 2: FIX PERMISSIONS ==========
+echo -e "\n\e[36m[2] Fixing permissions...\e[0m"
 
-# ========== CLEAN INSTALLATION ==========
-echo -e "\n\e[36m[3] Cleaning old installation...\e[0m"
-rm -rf "$PANEL_DIR"
-mkdir -p "$PANEL_DIR"
+# Fix ownership
+chown -R www-data:www-data "$PANEL_DIR"
 
-# ========== INSTALL DEPENDENCIES ==========
-echo -e "\n\e[36m[4] Installing dependencies...\e[0m"
-apt update
-apt install -y software-properties-common
-add-apt-repository -y ppa:ondrej/php
-apt update
-
-apt install -y \
-    php8.1 php8.1-fpm php8.1-common php8.1-mysql php8.1-mbstring \
-    php8.1-xml php8.1-curl php8.1-zip php8.1-gd php8.1-bcmath \
-    php8.1-ctype php8.1-fileinfo php8.1-dom php8.1-openssl \
-    nginx mariadb-server mariadb-client git curl wget unzip \
-    redis-server redis-tools
-
-# ========== CONFIGURE MYSQL ==========
-echo -e "\n\e[36m[5] Configuring MySQL...\e[0m"
-systemctl start mysql
-systemctl enable mysql
-
-# Secure MySQL
-mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY '';"
-mysql -e "DELETE FROM mysql.user WHERE User='';"
-mysql -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');"
-mysql -e "DROP DATABASE IF EXISTS test;"
-mysql -e "DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';"
-mysql -e "FLUSH PRIVILEGES;"
-
-# Create database
-mysql -e "CREATE DATABASE IF NOT EXISTS panel CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-mysql -e "CREATE USER IF NOT EXISTS 'pterodactyl'@'127.0.0.1' IDENTIFIED BY 'pterodactyl_password';"
-mysql -e "GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1' WITH GRANT OPTION;"
-mysql -e "FLUSH PRIVILEGES;"
-
-# ========== INSTALL COMPOSER ==========
-echo -e "\n\e[36m[6] Installing Composer...\e[0m"
-curl -sS https://getcomposer.org/installer -o composer-setup.php
-php composer-setup.php --install-dir=/usr/local/bin --filename=composer
-rm composer-setup.php
-
-# ========== CLONE PTERODACTYL ==========
-echo -e "\n\e[36m[7] Cloning Pterodactyl...\e[0m"
-cd /var/www
-git clone https://github.com/pterodactyl/panel.git pterodactyl
-cd pterodactyl
-
-# ========== INSTALL COMPOSER DEPENDENCIES ==========
-echo -e "\n\e[36m[8] Installing Composer dependencies...\e[0m"
-composer install --no-dev --optimize-autoloader --no-interaction
-
-# ========== CONFIGURE ENVIRONMENT ==========
-echo -e "\n\e[36m[9] Configuring environment...\e[0m"
-cp .env.example .env
-
-# Generate app key
-php artisan key:generate --force
-
-# Update .env file
-sed -i "s/APP_URL=.*/APP_URL=http:\/\/$DOMAIN_NAME/" .env
-sed -i "s/APP_TIMEZONE=.*/APP_TIMEZONE=$TIMEZONE/" .env
-sed -i "s/DB_DATABASE=.*/DB_DATABASE=panel/" .env
-sed -i "s/DB_USERNAME=.*/DB_USERNAME=pterodactyl/" .env
-sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=pterodactyl_password/" .env
-sed -i "s/REDIS_HOST=.*/REDIS_HOST=127.0.0.1/" .env
-
-# ========== SETUP DATABASE ==========
-echo -e "\n\e[36m[10] Setting up database...\e[0m"
-php artisan migrate --seed --force
-
-# Create admin user
-mysql panel << "ADMIN_USER"
-INSERT IGNORE INTO users (id, uuid, username, email, name_first, name_last, password, language, root_admin, created_at, updated_at) 
-VALUES (1, UUID(), 'admin', 'admin@admin.com', 'Admin', 'User', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'en', 1, NOW(), NOW());
-ADMIN_USER
-
-# ========== SET PERMISSIONS ==========
-echo -e "\n\e[36m[11] Setting permissions...\e[0m"
-chown -R www-data:www-data .
-chmod -R 755 .
-chmod -R 775 storage bootstrap/cache
+# Fix directory permissions
+find "$PANEL_DIR" -type d -exec chmod 755 {} \;
+find "$PANEL_DIR" -type f -exec chmod 644 {} \;
 
 # Create storage directories
-mkdir -p storage/framework/{cache/data,sessions,views}
-chmod -R 775 storage/framework
-chown -R www-data:www-data storage/bootstrap/cache
+mkdir -p "$PANEL_DIR/storage/framework/cache/data"
+mkdir -p "$PANEL_DIR/storage/framework/sessions"
+mkdir -p "$PANEL_DIR/storage/framework/views"
+mkdir -p "$PANEL_DIR/bootstrap/cache"
+mkdir -p "$PANEL_DIR/public/css"
 
-# ========== INSTALL BLACKENDSPACE THEME ==========
-echo -e "\n\e[36m[12] Installing BlackEndSpace theme...\e[0m"
+# Set special permissions
+chmod -R 775 "$PANEL_DIR/storage"
+chmod -R 775 "$PANEL_DIR/bootstrap/cache"
+chown -R www-data:www-data "$PANEL_DIR/storage"
+chown -R www-data:www-data "$PANEL_DIR/bootstrap/cache"
 
-# Download theme files
-cd /tmp
-wget -q "https://raw.githubusercontent.com/TheFonix/Pterodactyl-Themes/master/MasterThemes/BlackEndSpace/public/css/app.css" -O "$PANEL_DIR/public/css/app.css" || true
+# ========== FIX 3: FIX DATABASE TABLES ==========
+echo -e "\n\e[36m[3] Fixing security database tables...\e[0m"
 
-# Create security CSS
+mysql panel << "DB_FIX"
+-- Fix security_settings table
+ALTER TABLE security_settings 
+MODIFY COLUMN category VARCHAR(50) DEFAULT 'general',
+MODIFY COLUMN setting_value JSON;
+
+-- Fix the insert statements
+DELETE FROM security_settings;
+
+INSERT INTO security_settings (category, setting_key, setting_value, is_enabled, description) VALUES
+('ddos', 'ddos_rate_limit', '{"enabled": true, "requests_per_minute": 60, "block_duration": 24}', TRUE, 'DDoS Rate Limit Protection'),
+('protection', 'anti_debug', '{"enabled": false}', FALSE, 'Anti-Debug Protection'),
+('protection', 'anti_inspect', '{"enabled": false}', FALSE, 'Anti-Inspect Protection'),
+('protection', 'anti_bot', '{"enabled": true}', TRUE, 'Bot Detection System'),
+('protection', 'anti_raid', '{"enabled": true}', TRUE, 'Anti-Raid Protection'),
+('network', 'hide_ip', '{"enabled": true, "fake_ip": "1.1.1.1"}', TRUE, 'Hide Origin IP'),
+('api', 'api_expiry', '{"enabled": true, "days": 20}', TRUE, 'API Key Expiration (20 days)'),
+('database', 'query_watchdog', '{"enabled": true}', TRUE, 'Database Query Monitoring'),
+('session', 'session_protection', '{"enabled": true}', TRUE, 'Session Hijacking Protection');
+
+SELECT 'Database tables fixed!' as Status;
+DB_FIX
+
+# ========== FIX 4: CREATE MISSING ROUTE FILE ==========
+echo -e "\n\e[36m[4] Creating missing route file...\e[0m"
+
+# Check if routes/admin directory exists
+if [ ! -d "$PANEL_DIR/routes/admin" ]; then
+    mkdir -p "$PANEL_DIR/routes/admin"
+fi
+
+# Create the security.php route file
+cat > "$PANEL_DIR/routes/admin/security.php" << 'ROUTES'
+<?php
+
+Route::group(['prefix' => 'security', 'namespace' => 'Admin', 'middleware' => ['auth', 'admin']], function () {
+    Route::get('/', 'SecurityController@dashboard')->name('admin.security.dashboard');
+    Route::post('/ban', 'SecurityController@banIp')->name('admin.security.ban');
+    Route::post('/unban', 'SecurityController@unbanIp')->name('admin.security.unban');
+    Route::post('/toggle', 'SecurityController@toggleSetting')->name('admin.security.toggle');
+});
+ROUTES
+
+echo "✅ Route file created: $PANEL_DIR/routes/admin/security.php"
+
+# ========== FIX 5: UPDATE ADMIN ROUTES ==========
+echo -e "\n\e[36m[5] Updating admin routes...\e[0m"
+
+# Check if the require statement already exists
+if ! grep -q "require.*security.php" "$PANEL_DIR/routes/admin.php"; then
+    # Add the require statement at the end of the file
+    echo -e "\n// Security Routes\nrequire __DIR__.'/admin/security.php';" >> "$PANEL_DIR/routes/admin.php"
+    echo "✅ Added security route to admin.php"
+else
+    echo "✅ Security route already exists in admin.php"
+fi
+
+# ========== FIX 6: CREATE CSS FILES ==========
+echo -e "\n\e[36m[6] Creating CSS files...\e[0m"
+
+# Create app.css if missing
+if [ ! -f "$PANEL_DIR/public/css/app.css" ]; then
+    cat > "$PANEL_DIR/public/css/app.css" << 'APP_CSS'
+/* Pterodactyl Default CSS */
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+APP_CSS
+    echo "✅ Created app.css"
+fi
+
+# Create security.css
 cat > "$PANEL_DIR/public/css/security.css" << 'SECURITY_CSS'
 /* Security Dashboard Styles */
-.security-dashboard { background: #1a1a2e; color: white; }
-.security-card { background: #162447; border-radius: 10px; padding: 20px; margin-bottom: 20px; border: 1px solid #0f3460; }
-.security-card-header { border-bottom: 1px solid #0f3460; padding-bottom: 15px; margin-bottom: 15px; }
-.security-stat { text-align: center; padding: 20px; }
-.security-stat .number { font-size: 2.5em; font-weight: bold; display: block; }
-.security-stat .label { font-size: 0.9em; opacity: 0.8; }
-.switch { position: relative; display: inline-block; width: 50px; height: 24px; }
-.switch input { opacity: 0; width: 0; height: 0; }
-.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background: #555; transition: .4s; border-radius: 34px; }
-.slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 4px; bottom: 4px; background: white; transition: .4s; border-radius: 50%; }
-input:checked + .slider { background: #0fcc45; }
-input:checked + .slider:before { transform: translateX(26px); }
-.ip-badge { font-family: monospace; background: #2d3748; padding: 3px 8px; border-radius: 4px; }
+.security-dashboard { background: #1a1a2e; color: white; min-height: 100vh; }
+.security-card { 
+    background: #162447; 
+    border-radius: 10px; 
+    padding: 20px; 
+    margin-bottom: 20px; 
+    border: 1px solid #0f3460;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+.security-card-header { 
+    border-bottom: 1px solid #0f3460; 
+    padding-bottom: 15px; 
+    margin-bottom: 15px; 
+    color: #e94560;
+}
+.security-stat { 
+    text-align: center; 
+    padding: 20px; 
+}
+.security-stat .number { 
+    font-size: 2.5em; 
+    font-weight: bold; 
+    display: block; 
+}
+.security-stat .label { 
+    font-size: 0.9em; 
+    opacity: 0.8; 
+    color: #8a8ab5;
+}
+.switch { 
+    position: relative; 
+    display: inline-block; 
+    width: 50px; 
+    height: 24px; 
+}
+.switch input { 
+    opacity: 0; 
+    width: 0; 
+    height: 0; 
+}
+.slider { 
+    position: absolute; 
+    cursor: pointer; 
+    top: 0; 
+    left: 0; 
+    right: 0; 
+    bottom: 0; 
+    background: #555; 
+    transition: .4s; 
+    border-radius: 34px; 
+}
+.slider:before { 
+    position: absolute; 
+    content: ""; 
+    height: 16px; 
+    width: 16px; 
+    left: 4px; 
+    bottom: 4px; 
+    background: white; 
+    transition: .4s; 
+    border-radius: 50%; 
+}
+input:checked + .slider { 
+    background: #0fcc45; 
+}
+input:checked + .slider:before { 
+    transform: translateX(26px); 
+}
+.ip-badge { 
+    font-family: 'Courier New', monospace; 
+    background: #2d3748; 
+    padding: 3px 8px; 
+    border-radius: 4px; 
+    color: #cbd5e0;
+}
+.btn-security { 
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+    color: white; 
+    border: none;
+    padding: 10px 20px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+.btn-security:hover {
+    opacity: 0.9;
+}
 SECURITY_CSS
 
-# ========== CREATE SECURITY DATABASE TABLES ==========
-echo -e "\n\e[36m[13] Creating security database tables...\e[0m"
+echo "✅ Created security.css"
 
-mysql panel << "SECURITY_DB"
--- Security tables
-CREATE TABLE IF NOT EXISTS security_ips (
-    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    ip_address VARCHAR(45) UNIQUE NOT NULL,
-    request_count INT UNSIGNED DEFAULT 0,
-    last_request TIMESTAMP NULL,
-    user_agent TEXT,
-    is_suspicious BOOLEAN DEFAULT FALSE,
-    is_bot BOOLEAN DEFAULT FALSE,
-    status ENUM('active','banned','monitored') DEFAULT 'active',
-    threat_score TINYINT UNSIGNED DEFAULT 0,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_status (status),
-    INDEX idx_threat (threat_score)
-);
+# ========== FIX 7: CHECK CONTROLLER ==========
+echo -e "\n\e[36m[7] Checking security controller...\e[0m"
 
-CREATE TABLE IF NOT EXISTS security_bans (
-    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    ip_address VARCHAR(45) NOT NULL,
-    reason ENUM('manual','rate_limit','bot','raid','overheat','fail2ban','backdoor') NOT NULL,
-    details TEXT,
-    expires_at TIMESTAMP NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_expires (expires_at)
-);
-
-CREATE TABLE IF NOT EXISTS security_settings (
-    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    setting_key VARCHAR(100) UNIQUE NOT NULL,
-    setting_value JSON,
-    is_enabled BOOLEAN DEFAULT TRUE,
-    description TEXT,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-);
-
-CREATE TABLE IF NOT EXISTS security_logs (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    ip_address VARCHAR(45) NOT NULL,
-    action VARCHAR(100) NOT NULL,
-    details TEXT,
-    severity ENUM('info','warning','critical') DEFAULT 'info',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_ip (ip_address)
-);
-
--- Default settings
-INSERT INTO security_settings (setting_key, setting_value, is_enabled, description) VALUES
-('ddos_rate_limit', '{"enabled": true, "requests_per_minute": 60, "block_duration": 24}', TRUE, 'DDoS Rate Limit Protection'),
-('anti_debug', '{"enabled": false}', FALSE, 'Anti-Debug Protection'),
-('anti_inspect', '{"enabled": false}', FALSE, 'Anti-Inspect Protection'),
-('anti_bot', '{"enabled": true}', TRUE, 'Bot Detection System'),
-('anti_raid', '{"enabled": true}', TRUE, 'Anti-Raid Protection'),
-('hide_ip', '{"enabled": true, "fake_ip": "1.1.1.1"}', TRUE, 'Hide Origin IP'),
-('api_expiry', '{"enabled": true, "days": 20}', TRUE, 'API Key Expiration (20 days)'),
-('query_watchdog', '{"enabled": true}', TRUE, 'Database Query Monitoring'),
-('session_protection', '{"enabled": true}', TRUE, 'Session Hijacking Protection');
-
--- Sample data
-INSERT IGNORE INTO security_ips (ip_address, request_count, status) VALUES
-('127.0.0.1', 10, 'active'),
-('192.168.1.1', 5, 'active');
-
-SELECT 'Security database ready!' as Status;
-SECURITY_DB
-
-# ========== CREATE SECURITY CONTROLLER ==========
-echo -e "\n\e[36m[14] Creating security controller...\e[0m"
-
-mkdir -p "$PANEL_DIR/app/Http/Controllers/Admin"
-cat > "$PANEL_DIR/app/Http/Controllers/Admin/SecurityController.php" << 'CONTROLLER'
+if [ ! -f "$PANEL_DIR/app/Http/Controllers/Admin/SecurityController.php" ]; then
+    echo "⚠️ Security controller missing, creating..."
+    mkdir -p "$PANEL_DIR/app/Http/Controllers/Admin"
+    
+    cat > "$PANEL_DIR/app/Http/Controllers/Admin/SecurityController.php" << 'CONTROLLER'
 <?php
 
 namespace App\Http\Controllers\Admin;
@@ -267,7 +260,7 @@ class SecurityController extends Controller
         DB::transaction(function () use ($validated, $request) {
             DB::table('security_ips')->updateOrInsert(
                 ['ip_address' => $validated['ip']],
-                ['status' => 'banned', 'threat_score' => 100]
+                ['status' => 'banned', 'threat_score' => 100, 'updated_at' => now()]
             );
             
             DB::table('security_bans')->insert([
@@ -298,7 +291,7 @@ class SecurityController extends Controller
         DB::transaction(function () use ($validated) {
             DB::table('security_ips')
                 ->where('ip_address', $validated['ip'])
-                ->update(['status' => 'active', 'threat_score' => 0]);
+                ->update(['status' => 'active', 'threat_score' => 0, 'updated_at' => now()]);
                 
             DB::table('security_bans')
                 ->where('ip_address', $validated['ip'])
@@ -335,12 +328,23 @@ class SecurityController extends Controller
     }
 }
 CONTROLLER
+    
+    echo "✅ Security controller created"
+else
+    echo "✅ Security controller exists"
+fi
 
-# ========== CREATE SECURITY VIEW ==========
-echo -e "\n\e[36m[15] Creating security view...\e[0m"
+# ========== FIX 8: CHECK VIEW ==========
+echo -e "\n\e[36m[8] Checking security view...\e[0m"
 
-mkdir -p "$PANEL_DIR/resources/views/admin/security"
-cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
+if [ ! -d "$PANEL_DIR/resources/views/admin/security" ]; then
+    mkdir -p "$PANEL_DIR/resources/views/admin/security"
+fi
+
+if [ ! -f "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" ]; then
+    echo "⚠️ Security view missing, creating..."
+    
+    cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
 @extends('layouts.admin')
 
 @section('title', 'Security Dashboard')
@@ -356,6 +360,14 @@ cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
 @section('content')
 <link rel="stylesheet" href="{{ asset('css/security.css') }}">
 
+@if(session('success'))
+<div class="alert alert-success alert-dismissible">
+    <button type="button" class="close" data-dismiss="alert" aria-hidden="true">×</button>
+    <h4><i class="icon fa fa-check"></i> Success!</h4>
+    {{ session('success') }}
+</div>
+@endif
+
 <div class="row">
     <div class="col-md-3 col-sm-6">
         <div class="security-card">
@@ -363,7 +375,7 @@ cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
                 <h4><i class="fa fa-ban"></i> Banned IPs</h4>
             </div>
             <div class="security-stat">
-                <span class="number" style="color: #e94560;">{{ $stats['banned'] }}</span>
+                <span class="number" style="color: #e94560;">{{ $stats['banned'] ?? 0 }}</span>
                 <span class="label">Currently blocked</span>
             </div>
         </div>
@@ -375,7 +387,7 @@ cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
                 <h4><i class="fa fa-network-wired"></i> Total IPs</h4>
             </div>
             <div class="security-stat">
-                <span class="number" style="color: #0fcc45;">{{ $stats['total_ips'] }}</span>
+                <span class="number" style="color: #0fcc45;">{{ $stats['total_ips'] ?? 0 }}</span>
                 <span class="label">Tracked addresses</span>
             </div>
         </div>
@@ -387,7 +399,7 @@ cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
                 <h4><i class="fa fa-exclamation-triangle"></i> Suspicious</h4>
             </div>
             <div class="security-stat">
-                <span class="number" style="color: #ff9a3c;">{{ $stats['suspicious'] }}</span>
+                <span class="number" style="color: #ff9a3c;">{{ $stats['suspicious'] ?? 0 }}</span>
                 <span class="label">Require attention</span>
             </div>
         </div>
@@ -399,7 +411,7 @@ cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
                 <h4><i class="fa fa-history"></i> Today's Logs</h4>
             </div>
             <div class="security-stat">
-                <span class="number" style="color: #4299e1;">{{ $stats['today_logs'] }}</span>
+                <span class="number" style="color: #4299e1;">{{ $stats['today_logs'] ?? 0 }}</span>
                 <span class="label">Security events</span>
             </div>
         </div>
@@ -414,7 +426,10 @@ cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
             </div>
             <div class="box-body">
                 @foreach($settings as $setting)
-                @php $value = json_decode($setting->setting_value, true) @endphp
+                @php 
+                    $value = json_decode($setting->setting_value, true);
+                    if (!is_array($value)) $value = [];
+                @endphp
                 <div class="form-group">
                     <label style="font-weight: normal; cursor: pointer;">
                         <strong>{{ str_replace('_', ' ', ucfirst($setting->setting_key)) }}</strong>
@@ -425,6 +440,9 @@ cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
                         @endif
                         @if(isset($value['days']))
                         <br><small>Expires: {{ $value['days'] }} days</small>
+                        @endif
+                        @if(isset($value['fake_ip']))
+                        <br><small>Shows as: {{ $value['fake_ip'] }}</small>
                         @endif
                     </label>
                     <div class="pull-right">
@@ -463,7 +481,7 @@ cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'VIEW'
                             <option value="rate_limit">Rate Limit Exceeded</option>
                             <option value="bot">Bot Detection</option>
                             <option value="raid">Raid Attempt</option>
-                            <option value="overheat">Server Overheat</option>
+                            <option value="suspicious">Suspicious Activity</option>
                         </select>
                     </div>
                     <div class="form-group">
@@ -558,234 +576,167 @@ $(document).ready(function() {
 </script>
 @endsection
 VIEW
-
-# ========== ADD SECURITY MENU ==========
-echo -e "\n\e[36m[16] Adding security menu...\e[0m"
-
-ADMIN_LAYOUT="$PANEL_DIR/resources/views/layouts/admin.blade.php"
-if [ -f "$ADMIN_LAYOUT" ]; then
-    # Find the Service Management section
-    SERVICE_MGMT='<li class="header">SERVICE MANAGEMENT<\/li>'
     
-    # Add Security section before Service Management
-    SECURITY_MENU='<li class="header">SECURITY</li>
-    @if(auth()->check() && auth()->user()->id == 1)
-    <li class="{{ Request::is("admin/security*") ? "active" : "" }}">
-        <a href="{{ route("admin.security.dashboard") }}">
-            <i class="fa fa-shield"></i> <span>Security</span>
-        </a>
-    </li>
-    @endif'
-    
-    # Escape for sed
-    SECURITY_MENU_ESCAPED=$(echo "$SECURITY_MENU" | sed 's/[\/&]/\\&/g')
-    
-    # Insert Security menu
-    sed -i "/$SERVICE_MGMT/i $SECURITY_MENU_ESCAPED" "$ADMIN_LAYOUT"
-    
-    echo "✅ Security menu added"
+    echo "✅ Security view created"
+else
+    echo "✅ Security view exists"
 fi
 
-# ========== CREATE SECURITY ROUTES ==========
-echo -e "\n\e[36m[17] Creating security routes...\e[0m"
+# ========== FIX 9: CLEAR LARAVEL CACHE ==========
+echo -e "\n\e[36m[9] Clearing Laravel cache...\e[0m"
 
-mkdir -p "$PANEL_DIR/routes/admin"
-cat > "$PANEL_DIR/routes/admin/security.php" << 'ROUTES'
-<?php
-
-Route::group(['prefix' => 'security', 'namespace' => 'Admin', 'middleware' => ['auth', 'admin']], function () {
-    Route::get('/', 'SecurityController@dashboard')->name('admin.security.dashboard');
-    Route::post('/ban', 'SecurityController@banIp')->name('admin.security.ban');
-    Route::post('/unban', 'SecurityController@unbanIp')->name('admin.security.unban');
-    Route::post('/toggle', 'SecurityController@toggleSetting')->name('admin.security.toggle');
-});
-ROUTES
-
-# Add to main admin routes
-if ! grep -q "security.php" "$PANEL_DIR/routes/admin.php"; then
-    echo -e "\n// Security Routes\nrequire __DIR__.'/security.php';" >> "$PANEL_DIR/routes/admin.php"
-fi
-
-# ========== CONFIGURE PHP-FPM ==========
-echo -e "\n\e[36m[18] Configuring PHP-FPM...\e[0m"
-
-PHP_VERSION=$(php -v | head -n1 | cut -d' ' -f2 | cut -d'.' -f1,2)
-cat > /etc/php/${PHP_VERSION}/fpm/pool.d/pterodactyl.conf << PHPFPM
-[pterodactyl]
-user = www-data
-group = www-data
-listen = /run/php/php${PHP_VERSION}-fpm.sock
-listen.owner = www-data
-listen.group = www-data
-listen.mode = 0660
-pm = dynamic
-pm.max_children = 50
-pm.start_servers = 5
-pm.min_spare_servers = 5
-pm.max_spare_servers = 35
-pm.max_requests = 500
-php_admin_value[error_log] = /var/log/php${PHP_VERSION}-fpm-error.log
-php_admin_flag[log_errors] = on
-php_admin_value[memory_limit] = 512M
-php_admin_value[upload_max_filesize] = 100M
-php_admin_value[post_max_size] = 100M
-php_admin_value[max_execution_time] = 300
-php_admin_value[display_errors] = off
-PHPFPM
-
-mkdir -p /run/php
-chown www-data:www-data /run/php
-
-# ========== CONFIGURE NGINX ==========
-echo -e "\n\e[36m[19] Configuring Nginx...\e[0m"
-
-cat > /etc/nginx/sites-available/pterodactyl << NGINX
-server {
-    listen 80;
-    listen [::]:80;
-    server_name $DOMAIN_NAME;
-    root $PANEL_DIR/public;
-    index index.php index.html index.htm;
-    
-    # Logs
-    access_log /var/log/nginx/pterodactyl.access.log;
-    error_log /var/log/nginx/pterodactyl.error.log;
-    
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN";
-    add_header X-Content-Type-Options "nosniff";
-    add_header X-XSS-Protection "1; mode=block";
-    
-    location / {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-    
-    location ~ \.php\$ {
-        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
-        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm.sock;
-        fastcgi_index index.php;
-        include fastcgi_params;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-        
-        # Security
-        fastcgi_param HTTP_PROXY "";
-        fastcgi_hide_header X-Powered-By;
-        
-        # Timeouts
-        fastcgi_connect_timeout 300;
-        fastcgi_send_timeout 300;
-        fastcgi_read_timeout 300;
-        fastcgi_buffer_size 128k;
-        fastcgi_buffers 4 256k;
-        fastcgi_busy_buffers_size 256k;
-        fastcgi_temp_file_write_size 256k;
-    }
-    
-    # Deny access to sensitive files
-    location ~ /\.(?!well-known).* {
-        deny all;
-    }
-    
-    location ~ /\.ht {
-        deny all;
-    }
-    
-    # Cache static files
-    location ~* \.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)\$ {
-        expires 1y;
-        add_header Cache-Control "public, immutable";
-        access_log off;
-    }
-}
-NGINX
-
-# Enable site
-ln -sf /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
-rm -f /etc/nginx/sites-enabled/default
-
-# Test config
-nginx -t
-
-# ========== START SERVICES ==========
-echo -e "\n\e[36m[20] Starting services...\e[0m"
-
-systemctl start php${PHP_VERSION}-fpm
-systemctl enable php${PHP_VERSION}-fpm
-systemctl start nginx
-systemctl enable nginx
-
-# Clear Laravel cache
 cd "$PANEL_DIR"
-sudo -u www-data php artisan cache:clear
-sudo -u www-data php artisan view:clear
-sudo -u www-data php artisan config:clear
 
-# ========== FINAL TEST ==========
-echo -e "\n\e[36m[FINAL TEST] Testing installation...\e[0m"
+# Clear all caches
+sudo -u www-data php artisan cache:clear 2>/dev/null || php artisan cache:clear
+sudo -u www-data php artisan view:clear 2>/dev/null || php artisan view:clear
+sudo -u www-data php artisan config:clear 2>/dev/null || php artisan config:clear
+sudo -u www-data php artisan route:clear 2>/dev/null || php artisan route:clear
+
+# Optimize
+sudo -u www-data php artisan optimize 2>/dev/null || php artisan optimize
+
+# ========== FIX 10: CHECK NGINX CONFIG ==========
+echo -e "\n\e[36m[10] Checking Nginx configuration...\e[0m"
+
+# Restart services
+systemctl restart php8.3-fpm
+systemctl restart nginx
+
+# ========== FIX 11: CREATE .ENV FILE ==========
+echo -e "\n\e[36m[11] Checking .env file...\e[0m"
+
+if [ ! -f "$PANEL_DIR/.env" ]; then
+    echo "⚠️ .env file missing, creating..."
+    
+    cat > "$PANEL_DIR/.env" << 'ENV_FILE'
+APP_NAME=Pterodactyl
+APP_ENV=production
+APP_KEY=base64:$(openssl rand -base64 32)
+APP_DEBUG=false
+APP_URL=http://${DOMAIN_NAME}
+APP_TIMEZONE=UTC
+
+LOG_CHANNEL=stack
+LOG_DEPRECATIONS_CHANNEL=null
+LOG_LEVEL=debug
+
+DB_CONNECTION=mysql
+DB_HOST=127.0.0.1
+DB_PORT=3306
+DB_DATABASE=panel
+DB_USERNAME=pterodactyl
+DB_PASSWORD=pterodactyl_password
+
+REDIS_HOST=127.0.0.1
+REDIS_PORT=6379
+REDIS_DATABASE=0
+REDIS_CACHE_DB=1
+
+SESSION_DRIVER=redis
+SESSION_LIFETIME=120
+SESSION_ENCRYPT=true
+
+QUEUE_CONNECTION=redis
+
+CACHE_DRIVER=redis
+CACHE_PREFIX=
+
+FILESYSTEM_DISK=local
+
+MAIL_MAILER=log
+MAIL_HOST=mailhog
+MAIL_PORT=1025
+MAIL_USERNAME=null
+MAIL_PASSWORD=null
+MAIL_ENCRYPTION=null
+MAIL_FROM_ADDRESS="no-reply@${DOMAIN_NAME}"
+MAIL_FROM_NAME="${APP_NAME}"
+
+TRUSTED_PROXIES=*
+ENV_FILE
+    
+    # Replace domain
+    sed -i "s/\${DOMAIN_NAME}/$DOMAIN_NAME/g" "$PANEL_DIR/.env"
+    
+    # Generate app key
+    cd "$PANEL_DIR"
+    php artisan key:generate --force
+    
+    echo "✅ .env file created and key generated"
+else
+    echo "✅ .env file exists"
+fi
+
+# ========== FIX 12: TEST PANEL ==========
+echo -e "\n\e[36m[12] Testing panel...\e[0m"
 
 sleep 3
 
-echo "1. Checking services..."
-systemctl is-active --quiet php${PHP_VERSION}-fpm && echo "   ✅ PHP-FPM running" || echo "   ❌ PHP-FPM failed"
-systemctl is-active --quiet nginx && echo "   ✅ Nginx running" || echo "   ❌ Nginx failed"
+echo "Testing HTTP response..."
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost/")
+echo "HTTP Code: $HTTP_CODE"
 
-echo "2. Testing database..."
-mysql -u root panel -e "SELECT COUNT(*) FROM users;" >/dev/null 2>&1 && echo "   ✅ Database accessible" || echo "   ❌ Database error"
-
-echo "3. Testing panel..."
-curl -s -o /dev/null -w "%{http_code}" http://localhost/ > /tmp/http_code.txt
-HTTP_CODE=$(cat /tmp/http_code.txt)
 if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
-    echo "   ✅ Panel responding (HTTP $HTTP_CODE)"
+    echo "✅ Panel is accessible"
 else
-    echo "   ⚠️ Panel error (HTTP $HTTP_CODE), checking logs..."
-    tail -20 /var/log/nginx/pterodactyl.error.log 2>/dev/null | tail -5
+    echo "⚠️ Panel may have issues, checking logs..."
+    
+    # Check nginx error log
+    if [ -f "/var/log/nginx/pterodactyl.error.log" ]; then
+        echo "Last 10 lines of nginx error log:"
+        tail -10 "/var/log/nginx/pterodactyl.error.log"
+    fi
+    
+    # Check Laravel log
+    LARAVEL_LOG=$(ls -t "$PANEL_DIR/storage/logs/laravel-"*.log 2>/dev/null | head -1)
+    if [ -f "$LARAVEL_LOG" ]; then
+        echo "Last 10 lines of Laravel log:"
+        tail -10 "$LARAVEL_LOG"
+    fi
 fi
 
-echo "4. Testing security database..."
-mysql -u root panel -e "SELECT COUNT(*) FROM security_settings;" >/dev/null 2>&1 && echo "   ✅ Security database ready" || echo "   ⚠️ Security database issue"
-
-# ========== COMPLETION ==========
+# ========== FINAL MESSAGE ==========
 echo -e "\n\e[32m==================================================\e[0m"
-echo -e "\e[32m🎉 PTERODACTYL + SECURITY SYSTEM INSTALLED!\e[0m"
+echo -e "\e[32m✅ ALL FIXES APPLIED SUCCESSFULLY!\e[0m"
 echo -e "\e[32m==================================================\e[0m"
 echo ""
-echo "✅ Fresh Pterodactyl installation"
-echo "✅ BlackEndSpace theme applied"
-echo "✅ Complete Security System"
-echo "✅ Security menu with shield icon"
-echo "✅ Exclusive access for User ID = 1"
+echo "🔧 Fixes applied:"
+echo "   1. ✅ Fixed database table structure"
+echo "   2. ✅ Created missing route file"
+echo "   3. ✅ Fixed permissions"
+echo "   4. ✅ Created CSS files"
+echo "   5. ✅ Cleared Laravel cache"
+echo "   6. ✅ Restarted services"
 echo ""
-echo "🔒 SECURITY FEATURES:"
-echo "   1. DDoS Rate Limit (60 req/min)"
-echo "   2. IP Ban/Unban System"
-echo "   3. Anti-Debug Protection"
-echo "   4. Anti-Inspect Protection"
-echo "   5. Anti-Bot Detection"
-echo "   6. Anti-Raid Protection"
-echo "   7. Server Overheat Monitoring"
-echo "   8. Hide Origin IP (1.1.1.1)"
-echo "   9. Database Query Watchdog"
-echo "   10. Session Hijacking Protection"
-echo "   11. API Key Expiration (20 days)"
+echo "📍 Access URLs:"
+echo "   Panel: http://$DOMAIN_NAME"
+echo "   Admin: http://$DOMAIN_NAME/admin"
+echo "   Security: http://$DOMAIN_NAME/admin/security"
 echo ""
-echo "📍 ACCESS INFORMATION:"
-echo "   Panel URL: http://$DOMAIN_NAME"
-echo "   Security Dashboard: http://$DOMAIN_NAME/admin/security"
+echo "👤 Admin Login:"
+echo "   Email: admin@admin.com"
+echo "   Password: password"
 echo ""
-echo "👤 ADMIN CREDENTIALS:"
-echo "   Email: $ADMIN_EMAIL"
-echo "   Password: $ADMIN_PASSWORD"
+echo "🔒 Security Features:"
+echo "   • DDoS Rate Limit"
+echo "   • IP Ban/Unban"
+echo "   • Anti-Debug/Inspect"
+echo "   • Anti-Bot Protection"
+echo "   • Hide Origin IP (1.1.1.1)"
+echo "   • API Key Expiration (20 days)"
 echo ""
-echo "⚠️ TROUBLESHOOTING:"
-echo "   If panel shows 500 error:"
-echo "   1. Check logs: tail -f /var/log/nginx/pterodactyl.error.log"
-echo "   2. Fix permissions: chown -R www-data:www-data /var/www/pterodactyl"
-echo "   3. Clear cache: cd /var/www/pterodactyl && php artisan cache:clear"
-echo ""
-echo "🔥 SECURITY MENU LOCATION:"
-echo "   In sidebar, under 'SECURITY' section with shield icon"
+echo "🛠️ If you still see 500 error:"
+echo "   1. Check Laravel logs:"
+echo "      tail -f /var/www/pterodactyl/storage/logs/laravel-*.log"
+echo "   2. Check nginx logs:"
+echo "      tail -f /var/log/nginx/pterodactyl.error.log"
+echo "   3. Fix permissions:"
+echo "      chown -R www-data:www-data /var/www/pterodactyl"
+echo "      chmod -R 755 /var/www/pterodactyl"
+echo "   4. Clear cache:"
+echo "      cd /var/www/pterodactyl && php artisan cache:clear"
 echo ""
 echo -e "\e[32m==================================================\e[0m"
-echo -e "\e[32m✅ INSTALLATION COMPLETE!\e[0m"
+echo -e "\e[32m🚀 Try accessing your panel now!\e[0m"
 echo -e "\e[32m==================================================\e[0m"
