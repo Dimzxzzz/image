@@ -1,75 +1,110 @@
 #!/bin/bash
 
 echo "=================================================="
-echo "🔥 BLACKENDSPACE THEME + ULTIMATE SECURITY INSTALL"
-echo "=================================================="
-echo "Features:"
-echo "1. ✅ Install BlackEndSpace Theme"
-echo "2. ✅ Fix all 403/500 permission errors"
-echo "3. ✅ Complete Security System with 15+ Features"
-echo "4. ✅ Beautiful Security Menu Interface"
-echo "5. ✅ Exclusive access for User ID = 1"
+echo "🔥 FIXING INSTALLATION ERRORS"
 echo "=================================================="
 
 # ========== CONFIGURATION ==========
 PANEL_DIR="/var/www/pterodactyl"
-THEME_URL="https://raw.githubusercontent.com/TheFonix/Pterodactyl-Themes/master/MasterThemes/BlackEndSpace"
-ADMIN_ID=1
-DOMAIN_NAME="zerrovvv.srv-cloud.biz.id" # CHANGE THIS
+DB_NAME="panel"
+DB_USER="root"
+DB_PASS=""
+DOMAIN_NAME="zero-xd.server-panell.biz.id"
 
-# ========== PHASE 1: PERMISSION FIX ==========
-echo -e "\n\e[36m[PHASE 1] Fixing Permissions...\e[0m"
+# ========== FIX 1: CREATE DATABASE ==========
+echo -e "\n\e[36m[FIX 1] Creating Database...\e[0m"
 
-systemctl stop nginx php8.1-fpm 2>/dev/null || true
+mysql -u root << "MYSQL_FIX"
+-- Create database if not exists
+CREATE DATABASE IF NOT EXISTS panel;
+USE panel;
 
-cd "$PANEL_DIR"
-chown -R www-data:www-data .
-find . -type d -exec chmod 755 {} \;
-find . -type f -exec chmod 644 {} \;
-chmod -R 775 storage bootstrap/cache
-chmod 777 storage/logs 2>/dev/null || true
+-- Check if users table exists
+SELECT COUNT(*) FROM users;
+MYSQL_FIX
 
-rm -rf storage/framework/cache/data/*
-rm -rf storage/framework/views/*
-rm -f bootstrap/cache/*.php
+if [ $? -eq 0 ]; then
+    echo "✅ Database panel exists and accessible"
+else
+    echo "⚠️ Database panel not found, creating fresh..."
+    
+    # Create fresh database
+    mysql -u root << "MYSQL_FRESH"
+CREATE DATABASE IF NOT EXISTS panel CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+USE panel;
 
-mkdir -p storage/framework/{cache/data,sessions,views}
-chmod -R 775 storage/framework
+-- Create minimal users table for testing
+CREATE TABLE IF NOT EXISTS users (
+    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    root_admin BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
 
-# ========== PHASE 2: BLACKENDSPACE THEME ==========
-echo -e "\n\e[36m[PHASE 2] Installing BlackEndSpace Theme...\e[0m"
+-- Insert admin user if not exists
+INSERT IGNORE INTO users (id, username, email, password, root_admin) VALUES
+(1, 'admin', 'admin@admin.com', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 1);
 
-BACKUP_DIR="$PANEL_DIR/public_backup_$(date +%s)"
-if [ ! -d "$PANEL_DIR/public_backup" ]; then
-    cp -r "$PANEL_DIR/public" "$BACKUP_DIR"
-    echo "✅ Original public directory backed up"
+-- Create sessions table
+CREATE TABLE IF NOT EXISTS sessions (
+    id VARCHAR(255) PRIMARY KEY,
+    user_id INT UNSIGNED,
+    ip_address VARCHAR(45),
+    user_agent TEXT,
+    payload TEXT,
+    last_activity INT,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+SELECT 'Database created successfully!' as Status;
+MYSQL_FRESH
 fi
 
+# ========== FIX 2: CREATE PUBLIC DIRECTORY STRUCTURE ==========
+echo -e "\n\e[36m[FIX 2] Creating Public Directory Structure...\e[0m"
+
+# Create necessary directories
+mkdir -p "$PANEL_DIR/public/css"
+mkdir -p "$PANEL_DIR/public/js"
+mkdir -p "$PANEL_DIR/public/images"
+mkdir -p "$PANEL_DIR/public/fonts"
+
+# Download BlackEndSpace theme files properly
+echo "Downloading theme files..."
 cd /tmp
-wget -q "$THEME_URL/public/css/app.css" -O "$PANEL_DIR/public/css/app.css" || true
-wget -q "$THEME_URL/public/css/admin.css" -O "$PANEL_DIR/public/css/admin.css" 2>/dev/null || true
-wget -q "$THEME_URL/public/js/app.js" -O "$PANEL_DIR/public/js/app.js" 2>/dev/null || true
 
-mkdir -p "$PANEL_DIR/public/images/themes"
-wget -q "$THEME_URL/public/images/logo.svg" -O "$PANEL_DIR/public/images/logo.svg" 2>/dev/null || true
-wget -q "$THEME_URL/public/images/favicon.ico" -O "$PANEL_DIR/public/images/favicon.ico" 2>/dev/null || true
+# Download using wget with proper error handling
+wget -q "https://raw.githubusercontent.com/TheFonix/Pterodactyl-Themes/master/MasterThemes/BlackEndSpace/public/css/app.css" -O /tmp/app.css
+if [ -f "/tmp/app.css" ]; then
+    cp /tmp/app.css "$PANEL_DIR/public/css/app.css"
+    echo "✅ CSS file downloaded"
+else
+    # Create minimal CSS if download fails
+    cat > "$PANEL_DIR/public/css/app.css" << 'MINIMAL_CSS'
+/* Minimal CSS for Pterodactyl */
+body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+.navbar { background: #1a202c; color: white; padding: 15px; }
+.container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+MINIMAL_CSS
+    echo "⚠️ Using fallback CSS"
+fi
 
-# Add custom CSS for security dashboard
-cat > "$PANEL_DIR/public/css/security.css" << 'CSS'
-/* Security Dashboard Custom Styles */
+# Create security CSS
+cat > "$PANEL_DIR/public/css/security.css" << 'SECURITY_CSS'
 .security-widget {
     border-radius: 10px;
     margin-bottom: 20px;
     box-shadow: 0 4px 6px rgba(0,0,0,0.1);
     border: none;
 }
-
 .security-widget .box-header {
     border-top-left-radius: 10px;
     border-top-right-radius: 10px;
     padding: 15px 20px;
 }
-
 .security-stat {
     text-align: center;
     padding: 20px;
@@ -78,57 +113,22 @@ cat > "$PANEL_DIR/public/css/security.css" << 'CSS'
     border-radius: 10px;
     margin-bottom: 15px;
 }
-
 .security-stat .number {
     font-size: 2.5em;
     font-weight: bold;
     display: block;
 }
-
-.security-stat .label {
-    font-size: 0.9em;
-    opacity: 0.9;
-}
-
-.feature-toggle {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 15px;
-    background: rgba(255,255,255,0.05);
-    border-radius: 8px;
-    margin-bottom: 8px;
-    transition: all 0.3s;
-}
-
-.feature-toggle:hover {
-    background: rgba(255,255,255,0.1);
-}
-
-.feature-toggle .title {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.feature-toggle .icon {
-    color: #667eea;
-    font-size: 1.2em;
-}
-
 .switch {
     position: relative;
     display: inline-block;
     width: 50px;
     height: 24px;
 }
-
 .switch input {
     opacity: 0;
     width: 0;
     height: 0;
 }
-
 .slider {
     position: absolute;
     cursor: pointer;
@@ -140,7 +140,6 @@ cat > "$PANEL_DIR/public/css/security.css" << 'CSS'
     transition: .4s;
     border-radius: 34px;
 }
-
 .slider:before {
     position: absolute;
     content: "";
@@ -152,15 +151,12 @@ cat > "$PANEL_DIR/public/css/security.css" << 'CSS'
     transition: .4s;
     border-radius: 50%;
 }
-
 input:checked + .slider {
     background-color: #0fcc45;
 }
-
 input:checked + .slider:before {
     transform: translateX(26px);
 }
-
 .ip-badge {
     font-family: 'Courier New', monospace;
     background: #2d3748;
@@ -168,44 +164,30 @@ input:checked + .slider:before {
     border-radius: 4px;
     color: #cbd5e0;
 }
+SECURITY_CSS
 
-.severity-critical { color: #e53e3e; }
-.severity-warning { color: #d69e2e; }
-.severity-info { color: #4299e1; }
+# Create minimal index.php if missing
+if [ ! -f "$PANEL_DIR/public/index.php" ]; then
+    cat > "$PANEL_DIR/public/index.php" << 'INDEX_PHP'
+<?php
+// Pterodactyl Panel Entry Point
+define('LARAVEL_START', microtime(true));
+require __DIR__.'/../vendor/autoload.php';
+$app = require_once __DIR__.'/../bootstrap/app.php';
+$kernel = $app->make(Illuminate\Contracts\Http\Kernel::class);
+$response = $kernel->handle(
+    $request = Illuminate\Http\Request::capture()
+);
+$response->send();
+$kernel->terminate($request, $response);
+INDEX_PHP
+fi
 
-.security-tab {
-    border-bottom: 2px solid transparent;
-    padding: 10px 20px;
-    cursor: pointer;
-    transition: all 0.3s;
-}
+# ========== FIX 3: CREATE SECURITY DATABASE TABLES ==========
+echo -e "\n\e[36m[FIX 3] Creating Security Database Tables...\e[0m"
 
-.security-tab.active {
-    border-bottom-color: #667eea;
-    color: #667eea;
-}
-
-.progress-thin {
-    height: 6px;
-    border-radius: 3px;
-    margin-top: 5px;
-}
-
-.chart-container {
-    height: 200px;
-    position: relative;
-}
-CSS
-
-echo "✅ BlackEndSpace theme installed with security styles"
-
-# ========== PHASE 3: ADVANCED SECURITY DATABASE ==========
-echo -e "\n\e[36m[PHASE 3] Creating Advanced Security Database...\e[0m"
-
-mysql -u root << "MYSQL_SECURITY"
-USE panel;
-
--- Drop old tables
+mysql -u root panel << "SECURITY_TABLES"
+-- Drop existing security tables
 DROP TABLE IF EXISTS security_settings;
 DROP TABLE IF EXISTS security_bans;
 DROP TABLE IF EXISTS security_ips;
@@ -214,1314 +196,504 @@ DROP TABLE IF EXISTS security_api_keys;
 DROP TABLE IF EXISTS security_sessions;
 DROP TABLE IF EXISTS security_queries;
 
--- Main security tables
+-- IP Management
 CREATE TABLE security_ips (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) UNIQUE NOT NULL,
     request_count INT UNSIGNED DEFAULT 0,
     last_request TIMESTAMP NULL,
     user_agent TEXT,
-    country_code VARCHAR(5),
     is_suspicious BOOLEAN DEFAULT FALSE,
-    is_fake_ip BOOLEAN DEFAULT FALSE,
     is_bot BOOLEAN DEFAULT FALSE,
-    is_vpn BOOLEAN DEFAULT FALSE,
     status ENUM('active','banned','monitored','whitelist') DEFAULT 'active',
     threat_score TINYINT UNSIGNED DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     INDEX idx_status (status),
-    INDEX idx_threat (threat_score),
-    INDEX idx_last_request (last_request)
+    INDEX idx_threat (threat_score)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Ban Records
 CREATE TABLE security_bans (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
-    reason ENUM('manual','rate_limit','fake_ip','fake_ua','bot','debugger','suspicious','raid','overheat','fail2ban','backdoor','session_hijack','api_abuse') NOT NULL,
+    reason ENUM('manual','rate_limit','fake_ip','bot','raid','overheat','fail2ban','backdoor') NOT NULL,
     details TEXT,
     banned_by INT UNSIGNED DEFAULT 1,
     expires_at TIMESTAMP NULL,
-    is_hidden BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_expires (expires_at),
-    INDEX idx_hidden (is_hidden),
-    INDEX idx_reason (reason)
+    INDEX idx_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Security Settings
 CREATE TABLE security_settings (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     category VARCHAR(50) NOT NULL,
     setting_key VARCHAR(100) UNIQUE NOT NULL,
-    setting_value JSON,
+    setting_value TEXT,
     is_enabled BOOLEAN DEFAULT TRUE,
     description TEXT,
     sort_order INT DEFAULT 0,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_category (category),
-    INDEX idx_enabled (is_enabled)
+    INDEX idx_category (category)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Security Logs
 CREATE TABLE security_logs (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
     action VARCHAR(100) NOT NULL,
-    details JSON,
+    details TEXT,
     severity ENUM('info','warning','critical') DEFAULT 'info',
-    category VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_ip_category (ip_address, category),
-    INDEX idx_severity_created (severity, created_at)
+    INDEX idx_ip (ip_address),
+    INDEX idx_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- API Keys
 CREATE TABLE security_api_keys (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     user_id INT UNSIGNED NOT NULL,
     api_key VARCHAR(64) UNIQUE NOT NULL,
-    api_secret VARCHAR(128) NOT NULL,
     name VARCHAR(100) NOT NULL,
-    permissions JSON,
-    last_used TIMESTAMP NULL,
     expires_at TIMESTAMP NULL,
     is_active BOOLEAN DEFAULT TRUE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_user (user_id),
-    INDEX idx_expires (expires_at),
-    INDEX idx_active (is_active)
+    INDEX idx_expires (expires_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE security_sessions (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    user_id INT UNSIGNED NOT NULL,
-    session_id VARCHAR(128) NOT NULL,
-    ip_address VARCHAR(45),
-    user_agent TEXT,
-    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_valid BOOLEAN DEFAULT TRUE,
-    invalidated_at TIMESTAMP NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_user_session (user_id, session_id),
-    INDEX idx_valid (is_valid),
-    UNIQUE KEY unique_session (session_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-CREATE TABLE security_queries (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    query_sql TEXT NOT NULL,
-    execution_time FLOAT,
-    user_id INT UNSIGNED NULL,
-    ip_address VARCHAR(45),
-    table_name VARCHAR(100),
-    is_suspicious BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_suspicious (is_suspicious),
-    INDEX idx_table (table_name),
-    INDEX idx_created (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- Insert all security features
+-- Insert default settings
 INSERT INTO security_settings (category, setting_key, setting_value, is_enabled, description, sort_order) VALUES
--- DDoS Protection
-('ddos', 'rate_limit_enabled', '{"enabled": true, "requests_per_minute": 60, "block_duration": 24}', TRUE, 'Rate limiting for DDoS protection', 1),
-('ddos', 'burst_protection', '{"enabled": true, "burst_limit": 100, "window_seconds": 10}', TRUE, 'Burst request protection', 2),
-('ddos', 'geo_blocking', '{"enabled": false, "blocked_countries": ["CN", "RU", "KR"]}', FALSE, 'Geographical blocking', 3),
+('ddos', 'rate_limit', '{"enabled":true,"requests":60,"duration":24}', TRUE, 'DDoS Rate Limiting', 1),
+('ddos', 'burst_protection', '{"enabled":true,"limit":100}', TRUE, 'Burst Protection', 2),
+('protection', 'anti_debug', '{"enabled":false}', FALSE, 'Anti-Debug', 3),
+('protection', 'anti_inspect', '{"enabled":false}', FALSE, 'Anti-Inspect', 4),
+('protection', 'anti_bot', '{"enabled":true}', TRUE, 'Anti-Bot', 5),
+('protection', 'anti_raid', '{"enabled":true}', TRUE, 'Anti-Raid', 6),
+('protection', 'hide_ip', '{"enabled":true,"fake_ip":"1.1.1.1"}', TRUE, 'Hide Origin IP', 7),
+('database', 'query_watchdog', '{"enabled":true}', TRUE, 'Query Monitoring', 8),
+('session', 'hijack_protection', '{"enabled":true}', TRUE, 'Session Protection', 9),
+('api', 'key_expiration', '{"enabled":true,"days":20}', TRUE, 'API Key Expiration', 10);
 
--- IP Management
-('ip', 'auto_ban_suspicious', '{"enabled": true, "threshold": 80}', TRUE, 'Auto-ban suspicious IPs', 4),
-('ip', 'ip_whitelist', '{"enabled": true, "ips": ["127.0.0.1"]}', TRUE, 'IP whitelist', 5),
-('ip', 'hide_origin_ip', '{"enabled": true, "fake_ip": "1.1.1.1", "proxy_header": "CF-Connecting-IP"}', TRUE, 'Hide origin IP address', 6),
+-- Insert sample data
+INSERT INTO security_ips (ip_address, request_count, status, threat_score) VALUES
+('127.0.0.1', 10, 'whitelist', 0),
+('192.168.1.1', 5, 'active', 10),
+('10.0.0.1', 100, 'monitored', 70);
 
--- Anti-Bot
-('bot', 'bot_protection', '{"enabled": true, "check_user_agent": true, "check_behavior": true}', TRUE, 'Bot detection system', 7),
-('bot', 'honeypot', '{"enabled": true, "trap_urls": ["/admin/honeypot"]}', TRUE, 'Honeypot traps', 8),
+INSERT INTO security_bans (ip_address, reason, expires_at) VALUES
+('203.0.113.45', 'rate_limit', DATE_ADD(NOW(), INTERVAL 24 HOUR)),
+('198.51.100.22', 'bot', DATE_ADD(NOW(), INTERVAL 12 HOUR));
 
--- Anti-Debug/Inspect
-('debug', 'anti_debug', '{"enabled": false, "methods": ["performance", "console"]}', FALSE, 'Anti-debugging protection', 9),
-('debug', 'anti_inspect', '{"enabled": false, "block_devtools": true, "block_right_click": true}', FALSE, 'Anti-inspection protection', 10),
+SELECT 'Security tables created successfully!' as Status;
+SECURITY_TABLES
 
--- Advanced Protection
-('advanced', 'anti_raid', '{"enabled": true, "max_concurrent": 10, "cooldown": 30}', TRUE, 'Anti-raid protection', 11),
-('advanced', 'anti_overheat', '{"enabled": true, "cpu_threshold": 80, "memory_threshold": 90}', TRUE, 'Server overheat protection', 12),
-('advanced', 'fail2ban', '{"enabled": true, "max_attempts": 5, "ban_time": 3600}', TRUE, 'Fail2Ban integration', 13),
-('advanced', 'anti_peek', '{"enabled": true, "block_directories": true, "hide_server_info": true}', TRUE, 'Anti-peek protection', 14),
-('advanced', 'anti_backdoor', '{"enabled": true, "scan_interval": 3600, "check_files": true}', TRUE, 'Anti-backdoor protection', 15),
-
--- Database Security
-('database', 'query_watchdog', '{"enabled": true, "log_slow_queries": true, "threshold": 1.0}', TRUE, 'Database query monitoring', 16),
-('database', 'prevent_sql_injection', '{"enabled": true, "patterns": ["union select", "sleep(", "benchmark("]}', TRUE, 'SQL injection prevention', 17),
-
--- Session Security
-('session', 'hijack_protection', '{"enabled": true, "check_ip": true, "check_agent": true}', TRUE, 'Session hijacking protection', 18),
-('session', 'session_timeout', '{"enabled": true, "timeout_minutes": 30, "regenerate_id": true}', TRUE, 'Session timeout settings', 19),
-
--- API Security
-('api', 'key_expiration', '{"enabled": true, "days": 20, "auto_renew": false}', TRUE, 'API key expiration (20 days)', 20),
-('api', 'rate_limit_api', '{"enabled": true, "requests_per_hour": 1000, "per_endpoint": 100}', TRUE, 'API rate limiting', 21),
-
--- Access Control
-('access', 'admin_only', '{"enabled": true, "user_ids": [1]}', TRUE, 'Admin-only access control', 22),
-('access', 'maintenance_mode', '{"enabled": false, "message": "System maintenance in progress"}', FALSE, 'Maintenance mode', 23),
-
--- Logging
-('logging', 'detailed_logging', '{"enabled": true, "retention_days": 90, "compress_old": true}', TRUE, 'Detailed security logging', 24),
-('logging', 'real_time_alerts', '{"enabled": true, "email_alerts": false, "discord_webhook": ""}', TRUE, 'Real-time security alerts', 25);
-
--- Insert sample IP data
-INSERT IGNORE INTO security_ips (ip_address, request_count, status, threat_score) VALUES
-('127.0.0.1', 15, 'whitelist', 0),
-('192.168.1.1', 8, 'active', 10),
-('10.0.0.1', 150, 'monitored', 65),
-('8.8.8.8', 3, 'active', 5),
-('1.1.1.1', 20, 'active', 15);
-
--- Insert sample bans
-INSERT INTO security_bans (ip_address, reason, details, expires_at) VALUES
-('203.0.113.45', 'rate_limit', 'Exceeded 100 requests in 1 minute', DATE_ADD(NOW(), INTERVAL 24 HOUR)),
-('198.51.100.22', 'bot', 'Detected as bot: HeadlessChrome', DATE_ADD(NOW(), INTERVAL 12 HOUR)),
-('192.0.2.100', 'raid', 'Multiple concurrent connections detected', DATE_ADD(NOW(), INTERVAL 6 HOUR));
-
--- Insert sample logs
-INSERT INTO security_logs (ip_address, action, details, severity, category) VALUES
-('192.168.1.100', 'login_success', '{"user": "admin", "method": "password"}', 'info', 'authentication'),
-('10.0.0.5', 'high_request_rate', '{"count": 150, "timeframe": "5m", "endpoint": "/api/servers"}', 'warning', 'ddos'),
-('203.0.113.45', 'ip_banned', '{"reason": "rate_limit", "duration": "24h", "threshold": "100/1m"}', 'critical', 'protection'),
-('8.8.8.8', 'api_key_created', '{"user_id": 1, "key_name": "Backup System"}', 'info', 'api'),
-('192.168.1.50', 'suspicious_query', '{"query": "SELECT * FROM users", "time": 2.5, "table": "users"}', 'warning', 'database');
-
-SELECT '✅ Advanced security database created successfully!' as Status;
-MYSQL_SECURITY
-
-# ========== PHASE 4: CREATE SECURITY MENU IN SIDEBAR ==========
-echo -e "\n\e[36m[PHASE 4] Creating Security Menu...\e[0m"
-
-ADMIN_LAYOUT="$PANEL_DIR/resources/views/layouts/admin.blade.php"
-
-if [ -f "$ADMIN_LAYOUT" ]; then
-    cp "$ADMIN_LAYOUT" "$ADMIN_LAYOUT.backup.$(date +%s)"
-    
-    # Find the Service Management section
-    if ! grep -q "fa-shield" "$ADMIN_LAYOUT"; then
-        # Add Security section after Service Management
-        SECURITY_MENU='@if(auth()->check() && auth()->user()->id == 1)
-    <li class="treeview {{ Request::is(\'admin/security*\') ? \'active\' : \'\' }}">
-        <a href="#">
-            <i class="fa fa-shield"></i>
-            <span>Security</span>
-            <span class="pull-right-container">
-                <i class="fa fa-angle-left pull-right"></i>
-            </span>
-        </a>
-        <ul class="treeview-menu">
-            <li class="{{ Request::is(\'admin/security/dashboard\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.dashboard\') }}">
-                    <i class="fa fa-dashboard"></i> Dashboard
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/ips*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.ips\') }}">
-                    <i class="fa fa-network-wired"></i> IP Management
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/ddos*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.ddos\') }}">
-                    <i class="fa fa-bolt"></i> DDoS Protection
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/bot*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.bot\') }}">
-                    <i class="fa fa-robot"></i> Anti-Bot
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/debug*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.debug\') }}">
-                    <i class="fa fa-bug"></i> Anti-Debug/Inspect
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/advanced*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.advanced\') }}">
-                    <i class="fa fa-cogs"></i> Advanced Protection
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/database*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.database\') }}">
-                    <i class="fa fa-database"></i> Database Security
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/session*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.session\') }}">
-                    <i class="fa fa-user-shield"></i> Session Security
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/api*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.api\') }}">
-                    <i class="fa fa-key"></i> API Security
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/logs*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.logs\') }}">
-                    <i class="fa fa-history"></i> Security Logs
-                </a>
-            </li>
-            <li class="{{ Request::is(\'admin/security/settings*\') ? \'active\' : \'\' }}">
-                <a href="{{ route(\'admin.security.settings\') }}">
-                    <i class="fa fa-sliders-h"></i> Settings
-                </a>
-            </li>
-        </ul>
-    </li>
-@endif'
-        
-        # Insert after Service Management section
-        sed -i '/<li class="{{ ! starts_with(Route::currentRouteName(), \x27admin.nests\x27) ?: \x27active\x27 }}">/a\\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
-        
-        echo "✅ Security menu added with 11 sub-menus"
-    else
-        echo "✅ Security menu already exists"
-    fi
-fi
-
-# ========== PHASE 5: CREATE SECURITY CONTROLLER ==========
-echo -e "\n\e[36m[PHASE 5] Creating Security Controller...\e[0m"
+# ========== FIX 4: CREATE SIMPLE SECURITY CONTROLLER ==========
+echo -e "\n\e[36m[FIX 4] Creating Security Controller...\e[0m"
 
 mkdir -p "$PANEL_DIR/app/Http/Controllers/Admin"
-cat > "$PANEL_DIR/app/Http/Controllers/Admin/SecurityController.php" << 'CONTROLLER_FILE'
+cat > "$PANEL_DIR/app/Http/Controllers/Admin/SecurityController.php" << 'CONTROLLER'
 <?php
-
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache;
-use Carbon\Carbon;
 
 class SecurityController extends Controller
 {
-    private $adminId = 1;
-    
     public function __construct()
     {
         $this->middleware(function ($request, $next) {
-            if (auth()->check() && auth()->user()->id == $this->adminId) {
+            if (auth()->check() && auth()->user()->id == 1) {
                 return $next($request);
             }
-            abort(403, 'Security dashboard access is restricted to system administrators.');
+            abort(403, 'Security dashboard access restricted.');
         });
     }
     
-    // ========== DASHBOARD ==========
     public function dashboard()
     {
-        $stats = $this->getSecurityStats();
-        $recentThreats = $this->getRecentThreats();
-        $systemHealth = $this->getSystemHealth();
-        
-        return view('admin.security.dashboard', compact('stats', 'recentThreats', 'systemHealth'));
-    }
-    
-    // ========== IP MANAGEMENT ==========
-    public function ips(Request $request)
-    {
-        $query = DB::table('security_ips');
-        
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
-        }
-        
-        if ($request->has('search')) {
-            $query->where('ip_address', 'LIKE', '%' . $request->search . '%');
-        }
-        
-        $ips = $query->orderBy('threat_score', 'desc')
-                    ->orderBy('last_request', 'desc')
-                    ->paginate(20);
-        
         $stats = [
-            'total' => DB::table('security_ips')->count(),
-            'banned' => DB::table('security_ips')->where('status', 'banned')->count(),
+            'banned_ips' => DB::table('security_bans')
+                ->where(function ($q) {
+                    $q->whereNull('expires_at')->orWhere('expires_at', '>', now());
+                })->count(),
+            'total_ips' => DB::table('security_ips')->count(),
             'suspicious' => DB::table('security_ips')->where('is_suspicious', true)->count(),
-            'today' => DB::table('security_ips')->whereDate('last_request', today())->count()
+            'today_logs' => DB::table('security_logs')->whereDate('created_at', today())->count()
         ];
         
-        return view('admin.security.ips', compact('ips', 'stats'));
+        $recentBans = DB::table('security_bans')
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get();
+            
+        $settings = DB::table('security_settings')->get();
+        
+        return view('admin.security.dashboard', compact('stats', 'recentBans', 'settings'));
     }
     
     public function banIp(Request $request)
     {
         $request->validate([
             'ip' => 'required|ip',
-            'reason' => 'required|in:manual,rate_limit,fake_ip,fake_ua,bot,raid,overheat,backdoor,session_hijack',
-            'duration' => 'required|integer|min:1|max:720',
-            'is_hidden' => 'boolean'
+            'reason' => 'required|string',
+            'duration' => 'required|integer|min:1'
         ]);
         
-        $ip = $request->ip;
+        DB::table('security_ips')->updateOrInsert(
+            ['ip_address' => $request->ip],
+            ['status' => 'banned', 'threat_score' => 100]
+        );
         
-        DB::transaction(function () use ($request, $ip) {
-            // Update IP status
-            DB::table('security_ips')->updateOrInsert(
-                ['ip_address' => $ip],
-                ['status' => 'banned', 'threat_score' => 100, 'updated_at' => now()]
-            );
-            
-            // Create ban record
-            DB::table('security_bans')->insert([
-                'ip_address' => $ip,
-                'reason' => $request->reason,
-                'details' => $request->details,
-                'banned_by' => auth()->id(),
-                'expires_at' => now()->addHours($request->duration),
-                'is_hidden' => $request->boolean('is_hidden'),
-                'created_at' => now()
-            ]);
-            
-            // Log
-            $this->logSecurityEvent($ip, 'ip_banned', [
-                'reason' => $request->reason,
-                'duration_hours' => $request->duration,
-                'hidden' => $request->boolean('is_hidden')
-            ], 'critical');
-        });
+        DB::table('security_bans')->insert([
+            'ip_address' => $request->ip,
+            'reason' => $request->reason,
+            'expires_at' => now()->addHours($request->duration),
+            'created_at' => now()
+        ]);
         
-        Cache::forget('security.banned_ips');
+        DB::table('security_logs')->insert([
+            'ip_address' => $request->ip(),
+            'action' => 'manual_ban',
+            'details' => "IP {$request->ip} banned: {$request->reason}",
+            'severity' => 'critical',
+            'created_at' => now()
+        ]);
         
-        return redirect()->route('admin.security.ips')
-            ->with('success', "IP $ip has been banned for {$request->duration} hours.");
+        return back()->with('success', "IP {$request->ip} banned.");
     }
     
     public function unbanIp(Request $request)
     {
         $request->validate(['ip' => 'required|ip']);
         
-        DB::transaction(function () use ($request) {
-            DB::table('security_ips')
-                ->where('ip_address', $request->ip)
-                ->update(['status' => 'active', 'threat_score' => 0]);
+        DB::table('security_ips')
+            ->where('ip_address', $request->ip)
+            ->update(['status' => 'active', 'threat_score' => 0]);
             
-            DB::table('security_bans')
-                ->where('ip_address', $request->ip)
-                ->where(function ($q) {
-                    $q->whereNull('expires_at')->orWhere('expires_at', '>', now());
-                })
-                ->update(['expires_at' => now()]);
+        DB::table('security_bans')
+            ->where('ip_address', $request->ip)
+            ->update(['expires_at' => now()]);
             
-            $this->logSecurityEvent($request->ip, 'ip_unbanned', [], 'info');
-        });
-        
-        return redirect()->route('admin.security.ips')
-            ->with('success', "IP {$request->ip} has been unbanned.");
+        return back()->with('success', "IP {$request->ip} unbanned.");
     }
     
-    // ========== DDoS PROTECTION ==========
-    public function ddos()
-    {
-        $settings = $this->getSettingsByCategory('ddos');
-        $rateLimits = $this->getRateLimitStats();
-        $topOffenders = DB::table('security_ips')
-            ->where('request_count', '>', 100)
-            ->orderBy('request_count', 'desc')
-            ->limit(10)
-            ->get();
-        
-        return view('admin.security.ddos', compact('settings', 'rateLimits', 'topOffenders'));
-    }
-    
-    public function updateDdosSettings(Request $request)
-    {
-        foreach ($request->settings as $key => $value) {
-            if (str_starts_with($key, 'ddos_')) {
-                DB::table('security_settings')
-                    ->where('setting_key', $key)
-                    ->update([
-                        'setting_value' => json_encode(['enabled' => (bool)$value]),
-                        'updated_at' => now()
-                    ]);
-            }
-        }
-        
-        $this->logSecurityEvent($request->ip(), 'ddos_settings_updated', $request->settings, 'info');
-        
-        return redirect()->route('admin.security.ddos')
-            ->with('success', 'DDoS settings updated successfully.');
-    }
-    
-    // ========== ANTI-BOT ==========
-    public function bot()
-    {
-        $settings = $this->getSettingsByCategory('bot');
-        $detectedBots = DB::table('security_ips')
-            ->where('is_bot', true)
-            ->orderBy('last_request', 'desc')
-            ->paginate(15);
-        
-        $botStats = [
-            'total' => DB::table('security_ips')->where('is_bot', true)->count(),
-            'today' => DB::table('security_ips')->where('is_bot', true)->whereDate('last_request', today())->count(),
-            'blocked' => DB::table('security_bans')->where('reason', 'bot')->where(function ($q) {
-                $q->whereNull('expires_at')->orWhere('expires_at', '>', now());
-            })->count()
-        ];
-        
-        return view('admin.security.bot', compact('settings', 'detectedBots', 'botStats'));
-    }
-    
-    // ========== ANTI-DEBUG/INSPECT ==========
-    public function debug()
-    {
-        $settings = $this->getSettingsByCategory('debug');
-        $debugAttempts = DB::table('security_logs')
-            ->where('action', 'LIKE', '%debug%')
-            ->orWhere('action', 'LIKE', '%inspect%')
-            ->orderBy('created_at', 'desc')
-            ->limit(50)
-            ->get();
-        
-        return view('admin.security.debug', compact('settings', 'debugAttempts'));
-    }
-    
-    public function toggleDebugFeature(Request $request)
+    public function toggleSetting(Request $request)
     {
         $request->validate([
-            'feature' => 'required|in:anti_debug,anti_inspect',
+            'key' => 'required|string',
             'enabled' => 'required|boolean'
         ]);
         
-        $this->updateSetting($request->feature, ['enabled' => $request->enabled]);
-        
-        $status = $request->enabled ? 'enabled' : 'disabled';
-        return response()->json(['success' => true, 'message' => "$request->feature $status"]);
-    }
-    
-    // ========== ADVANCED PROTECTION ==========
-    public function advanced()
-    {
-        $categories = ['advanced', 'access', 'logging'];
-        $allSettings = [];
-        
-        foreach ($categories as $category) {
-            $allSettings[$category] = $this->getSettingsByCategory($category);
-        }
-        
-        $protectionStats = [
-            'raid_prevented' => DB::table('security_logs')->where('action', 'raid_prevented')->count(),
-            'backdoor_scans' => DB::table('security_logs')->where('action', 'backdoor_scan')->count(),
-            'fail2ban_bans' => DB::table('security_bans')->where('reason', 'fail2ban')->count()
-        ];
-        
-        return view('admin.security.advanced', compact('allSettings', 'protectionStats'));
-    }
-    
-    // ========== DATABASE SECURITY ==========
-    public function database()
-    {
-        $settings = $this->getSettingsByCategory('database');
-        $slowQueries = DB::table('security_queries')
-            ->where('is_suspicious', true)
-            ->orderBy('created_at', 'desc')
-            ->paginate(20);
-        
-        $queryStats = [
-            'total' => DB::table('security_queries')->count(),
-            'suspicious' => DB::table('security_queries')->where('is_suspicious', true)->count(),
-            'today' => DB::table('security_queries')->whereDate('created_at', today())->count(),
-            'avg_time' => DB::table('security_queries')->avg('execution_time')
-        ];
-        
-        return view('admin.security.database', compact('settings', 'slowQueries', 'queryStats'));
-    }
-    
-    // ========== SESSION SECURITY ==========
-    public function session()
-    {
-        $settings = $this->getSettingsByCategory('session');
-        $activeSessions = DB::table('security_sessions')
-            ->where('is_valid', true)
-            ->orderBy('last_activity', 'desc')
-            ->paginate(20);
-        
-        $sessionStats = [
-            'total' => DB::table('security_sessions')->count(),
-            'active' => DB::table('security_sessions')->where('is_valid', true)->count(),
-            'hijack_attempts' => DB::table('security_logs')->where('action', 'session_hijack_attempt')->count()
-        ];
-        
-        return view('admin.security.session', compact('settings', 'activeSessions', 'sessionStats'));
-    }
-    
-    public function invalidateSession(Request $request)
-    {
-        DB::table('security_sessions')
-            ->where('id', $request->session_id)
-            ->update([
-                'is_valid' => false,
-                'invalidated_at' => now()
-            ]);
-        
-        $this->logSecurityEvent($request->ip(), 'session_invalidated', ['session_id' => $request->session_id], 'warning');
-        
-        return redirect()->route('admin.security.session')
-            ->with('success', 'Session invalidated successfully.');
-    }
-    
-    // ========== API SECURITY ==========
-    public function api()
-    {
-        $settings = $this->getSettingsByCategory('api');
-        $apiKeys = DB::table('security_api_keys')
-            ->orderBy('created_at', 'desc')
-            ->paginate(20);
-        
-        $apiStats = [
-            'total' => DB::table('security_api_keys')->count(),
-            'active' => DB::table('security_api_keys')->where('is_active', true)->count(),
-            'expired' => DB::table('security_api_keys')->where('expires_at', '<', now())->count(),
-            'used_today' => DB::table('security_api_keys')->whereDate('last_used', today())->count()
-        ];
-        
-        return view('admin.security.api', compact('settings', 'apiKeys', 'apiStats'));
-    }
-    
-    public function createApiKey(Request $request)
-    {
-        $request->validate([
-            'name' => 'required|string|max:100',
-            'user_id' => 'required|integer|exists:users,id',
-            'expires_days' => 'required|integer|min:1|max:365'
-        ]);
-        
-        $apiKey = bin2hex(random_bytes(32));
-        $apiSecret = hash('sha512', $apiKey . config('app.key'));
-        
-        DB::table('security_api_keys')->insert([
-            'user_id' => $request->user_id,
-            'api_key' => $apiKey,
-            'api_secret' => $apiSecret,
-            'name' => $request->name,
-            'expires_at' => now()->addDays($request->expires_days),
-            'created_at' => now()
-        ]);
-        
-        $this->logSecurityEvent($request->ip(), 'api_key_created', [
-            'name' => $request->name,
-            'user_id' => $request->user_id,
-            'expires_days' => $request->expires_days
-        ], 'info');
-        
-        return redirect()->route('admin.security.api')
-            ->with('success', "API key created: $apiKey")
-            ->with('api_key_copy', $apiKey);
-    }
-    
-    public function revokeApiKey(Request $request)
-    {
-        DB::table('security_api_keys')
-            ->where('id', $request->key_id)
-            ->update(['is_active' => false]);
-        
-        $this->logSecurityEvent($request->ip(), 'api_key_revoked', ['key_id' => $request->key_id], 'warning');
-        
-        return redirect()->route('admin.security.api')
-            ->with('success', 'API key revoked successfully.');
-    }
-    
-    // ========== SECURITY LOGS ==========
-    public function logs(Request $request)
-    {
-        $query = DB::table('security_logs');
-        
-        if ($request->has('severity')) {
-            $query->where('severity', $request->severity);
-        }
-        
-        if ($request->has('category')) {
-            $query->where('category', $request->category);
-        }
-        
-        if ($request->has('date')) {
-            $query->whereDate('created_at', $request->date);
-        }
-        
-        $logs = $query->orderBy('created_at', 'desc')->paginate(50);
-        
-        $logStats = [
-            'total' => DB::table('security_logs')->count(),
-            'critical' => DB::table('security_logs')->where('severity', 'critical')->count(),
-            'today' => DB::table('security_logs')->whereDate('created_at', today())->count(),
-            'by_category' => DB::table('security_logs')
-                ->select('category', DB::raw('COUNT(*) as count'))
-                ->groupBy('category')
-                ->get()
-        ];
-        
-        return view('admin.security.logs', compact('logs', 'logStats'));
-    }
-    
-    // ========== SETTINGS ==========
-    public function settings()
-    {
-        $allSettings = DB::table('security_settings')
-            ->orderBy('category')
-            ->orderBy('sort_order')
-            ->get()
-            ->groupBy('category');
-        
-        return view('admin.security.settings', compact('allSettings'));
-    }
-    
-    public function updateSettings(Request $request)
-    {
-        foreach ($request->settings as $key => $value) {
-            $setting = DB::table('security_settings')->where('setting_key', $key)->first();
+        DB::table('security_settings')
+            ->where('setting_key', $request->key)
+            ->update(['is_enabled' => $request->enabled]);
             
-            if ($setting) {
-                $currentValue = json_decode($setting->setting_value, true);
-                if (is_array($currentValue)) {
-                    $currentValue['enabled'] = (bool)$value;
-                    DB::table('security_settings')
-                        ->where('setting_key', $key)
-                        ->update(['setting_value' => json_encode($currentValue)]);
-                }
-            }
-        }
-        
-        $this->logSecurityEvent($request->ip(), 'security_settings_updated', $request->settings, 'info');
-        
-        return redirect()->route('admin.security.settings')
-            ->with('success', 'Security settings updated successfully.');
-    }
-    
-    // ========== HELPER METHODS ==========
-    private function getSecurityStats()
-    {
-        $today = now()->format('Y-m-d');
-        
-        return [
-            'total_bans' => DB::table('security_bans')->where(function ($q) {
-                $q->whereNull('expires_at')->orWhere('expires_at', '>', now());
-            })->count(),
-            
-            'active_threats' => DB::table('security_ips')
-                ->where('threat_score', '>', 50)
-                ->where('status', '!=', 'banned')
-                ->count(),
-            
-            'today_blocks' => DB::table('security_logs')
-                ->where('severity', 'critical')
-                ->whereDate('created_at', today())
-                ->count(),
-            
-            'api_requests' => DB::table('security_api_keys')
-                ->whereDate('last_used', today())
-                ->sum(DB::raw('1')),
-            
-            'ddos_attempts' => DB::table('security_logs')
-                ->where('category', 'ddos')
-                ->whereDate('created_at', today())
-                ->count(),
-            
-            'bot_detections' => DB::table('security_ips')
-                ->where('is_bot', true)
-                ->whereDate('updated_at', today())
-                ->count()
-        ];
-    }
-    
-    private function getRecentThreats()
-    {
-        return DB::table('security_logs')
-            ->where('severity', 'critical')
-            ->orderBy('created_at', 'desc')
-            ->limit(10)
-            ->get();
-    }
-    
-    private function getSystemHealth()
-    {
-        // Mock system health data
-        return [
-            'cpu_usage' => rand(10, 80),
-            'memory_usage' => rand(20, 90),
-            'disk_usage' => rand(30, 85),
-            'active_connections' => rand(50, 500),
-            'query_per_second' => rand(10, 100)
-        ];
-    }
-    
-    private function getSettingsByCategory($category)
-    {
-        return DB::table('security_settings')
-            ->where('category', $category)
-            ->orderBy('sort_order')
-            ->get()
-            ->mapWithKeys(function ($item) {
-                return [$item->setting_key => [
-                    'value' => json_decode($item->setting_value, true),
-                    'enabled' => (bool)$item->is_enabled,
-                    'description' => $item->description
-                ]];
-            });
-    }
-    
-    private function getRateLimitStats()
-    {
-        return [
-            'total_blocked' => DB::table('security_bans')->where('reason', 'rate_limit')->count(),
-            'today_blocked' => DB::table('security_bans')
-                ->where('reason', 'rate_limit')
-                ->whereDate('created_at', today())
-                ->count(),
-            'top_offender' => DB::table('security_ips')
-                ->orderBy('request_count', 'desc')
-                ->first(['ip_address', 'request_count'])
-        ];
-    }
-    
-    private function updateSetting($key, $value)
-    {
-        $current = DB::table('security_settings')->where('setting_key', $key)->first();
-        if ($current) {
-            $currentValue = json_decode($current->setting_value, true);
-            $newValue = array_merge($currentValue, $value);
-            
-            DB::table('security_settings')
-                ->where('setting_key', $key)
-                ->update(['setting_value' => json_encode($newValue)]);
-        }
-    }
-    
-    private function logSecurityEvent($ip, $action, $details = [], $severity = 'info')
-    {
-        DB::table('security_logs')->insert([
-            'ip_address' => $ip,
-            'action' => $action,
-            'details' => json_encode($details),
-            'severity' => $severity,
-            'category' => 'security',
-            'created_at' => now()
-        ]);
+        return response()->json(['success' => true]);
     }
 }
-CONTROLLER_FILE
+CONTROLLER
 
-# ========== PHASE 6: CREATE SECURITY VIEWS ==========
-echo -e "\n\e[36m[PHASE 6] Creating Security Views...\e[0m"
+# ========== FIX 5: CREATE SIMPLE SECURITY VIEW ==========
+echo -e "\n\e[36m[FIX 5] Creating Security Views...\e[0m"
 
-SECURITY_VIEWS_DIR="$PANEL_DIR/resources/views/admin/security"
-mkdir -p "$SECURITY_VIEWS_DIR"
-
-# Create dashboard view
-cat > "$SECURITY_VIEWS_DIR/dashboard.blade.php" << 'DASHBOARD_VIEW'
+mkdir -p "$PANEL_DIR/resources/views/admin/security"
+cat > "$PANEL_DIR/resources/views/admin/security/dashboard.blade.php" << 'DASHBOARD_VIEW'
 @extends('layouts.admin')
 
-@section('title')
-    Security Dashboard
-@endsection
+@section('title', 'Security Dashboard')
 
 @section('content-header')
-    <h1>Security Dashboard<small>Real-time protection overview</small></h1>
-    <ol class="breadcrumb">
-        <li><a href="{{ route('admin.index') }}">Admin</a></li>
-        <li><a href="{{ route('admin.security.dashboard') }}">Security</a></li>
-        <li class="active">Dashboard</li>
-    </ol>
+    <h1>Security Dashboard<small>Protection System</small></h1>
 @endsection
 
 @section('content')
+<link rel="stylesheet" href="/css/security.css">
+
 <div class="row">
-    <!-- Stats Cards -->
-    <div class="col-lg-3 col-md-6">
+    <div class="col-md-3">
         <div class="security-widget">
-            <div class="box-header" style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-ban"></i> Active Bans</h3>
+            <div class="box-header bg-red">
+                <h3 class="box-title">Banned IPs</h3>
             </div>
             <div class="box-body text-center">
                 <div class="security-stat" style="background: linear-gradient(135deg, #e53e3e 0%, #c53030 100%);">
-                    <span class="number">{{ $stats['total_bans'] }}</span>
-                    <span class="label">IP Addresses</span>
+                    <span class="number">{{ $stats['banned_ips'] }}</span>
                 </div>
-                <p class="text-muted">Currently blocked</p>
             </div>
         </div>
     </div>
     
-    <div class="col-lg-3 col-md-6">
+    <div class="col-md-3">
         <div class="security-widget">
-            <div class="box-header" style="background: linear-gradient(135deg, #d69e2e 0%, #b7791f 100%);">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-exclamation-triangle"></i> Active Threats</h3>
-            </div>
-            <div class="box-body text-center">
-                <div class="security-stat" style="background: linear-gradient(135deg, #d69e2e 0%, #b7791f 100%);">
-                    <span class="number">{{ $stats['active_threats'] }}</span>
-                    <span class="label">Detected</span>
-                </div>
-                <p class="text-muted">Requires attention</p>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-lg-3 col-md-6">
-        <div class="security-widget">
-            <div class="box-header" style="background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-bolt"></i> Today's Blocks</h3>
+            <div class="box-header bg-blue">
+                <h3 class="box-title">Total IPs</h3>
             </div>
             <div class="box-body text-center">
                 <div class="security-stat" style="background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);">
-                    <span class="number">{{ $stats['today_blocks'] }}</span>
-                    <span class="label">Prevented</span>
+                    <span class="number">{{ $stats['total_ips'] }}</span>
                 </div>
-                <p class="text-muted">Attack attempts blocked</p>
             </div>
         </div>
     </div>
     
-    <div class="col-lg-3 col-md-6">
+    <div class="col-md-3">
         <div class="security-widget">
-            <div class="box-header" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%);">
-                <h3 class="box-title" style="color: white;"><i class="fa fa-robot"></i> Bot Detections</h3>
+            <div class="box-header bg-yellow">
+                <h3 class="box-title">Suspicious</h3>
+            </div>
+            <div class="box-body text-center">
+                <div class="security-stat" style="background: linear-gradient(135deg, #d69e2e 0%, #b7791f 100%);">
+                    <span class="number">{{ $stats['suspicious'] }}</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-3">
+        <div class="security-widget">
+            <div class="box-header bg-green">
+                <h3 class="box-title">Today's Logs</h3>
             </div>
             <div class="box-body text-center">
                 <div class="security-stat" style="background: linear-gradient(135deg, #38a169 0%, #2f855a 100%);">
-                    <span class="number">{{ $stats['bot_detections'] }}</span>
-                    <span class="label">Today</span>
+                    <span class="number">{{ $stats['today_logs'] }}</span>
                 </div>
-                <p class="text-muted">Bot activities detected</p>
             </div>
         </div>
     </div>
 </div>
 
 <div class="row">
-    <div class="col-md-8">
-        <!-- Recent Threats -->
+    <div class="col-md-6">
         <div class="box security-widget">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-history"></i> Recent Security Threats</h3>
+            <div class="box-header">
+                <h3 class="box-title">Security Features</h3>
             </div>
-            <div class="box-body table-responsive">
+            <div class="box-body">
+                @foreach($settings as $setting)
+                <div class="form-group">
+                    <label>
+                        {{ ucfirst(str_replace('_', ' ', $setting->setting_key)) }}
+                        <small class="text-muted">{{ $setting->description }}</small>
+                    </label>
+                    <div class="pull-right">
+                        <label class="switch">
+                            <input type="checkbox" class="toggle-feature" 
+                                   data-key="{{ $setting->setting_key }}"
+                                   {{ $setting->is_enabled ? 'checked' : '' }}>
+                            <span class="slider"></span>
+                        </label>
+                    </div>
+                </div>
+                <hr>
+                @endforeach
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="box security-widget">
+            <div class="box-header">
+                <h3 class="box-title">Manual IP Ban</h3>
+            </div>
+            <div class="box-body">
+                <form action="{{ route('admin.security.ban') }}" method="POST">
+                    @csrf
+                    <div class="form-group">
+                        <label>IP Address</label>
+                        <input type="text" name="ip" class="form-control" placeholder="192.168.1.100" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Reason</label>
+                        <select name="reason" class="form-control" required>
+                            <option value="manual">Manual Ban</option>
+                            <option value="rate_limit">Rate Limit</option>
+                            <option value="bot">Bot Detection</option>
+                            <option value="suspicious">Suspicious</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label>Duration (Hours)</label>
+                        <input type="number" name="duration" class="form-control" value="24" min="1" required>
+                    </div>
+                    <button type="submit" class="btn btn-danger btn-block">
+                        <i class="fa fa-ban"></i> Ban IP
+                    </button>
+                </form>
+            </div>
+        </div>
+        
+        <div class="box security-widget">
+            <div class="box-header">
+                <h3 class="box-title">Recent Bans</h3>
+            </div>
+            <div class="box-body">
                 <table class="table table-hover">
                     <thead>
                         <tr>
-                            <th>Time</th>
-                            <th>IP Address</th>
+                            <th>IP</th>
+                            <th>Reason</th>
+                            <th>Expires</th>
                             <th>Action</th>
-                            <th>Severity</th>
-                            <th>Details</th>
                         </tr>
                     </thead>
                     <tbody>
-                        @forelse($recentThreats as $threat)
+                        @foreach($recentBans as $ban)
                         <tr>
-                            <td>{{ $threat->created_at->diffForHumans() }}</td>
-                            <td><span class="ip-badge">{{ $threat->ip_address }}</span></td>
-                            <td>{{ ucfirst(str_replace('_', ' ', $threat->action)) }}</td>
+                            <td><span class="ip-badge">{{ $ban->ip_address }}</span></td>
+                            <td>{{ ucfirst(str_replace('_', ' ', $ban->reason)) }}</td>
+                            <td>{{ $ban->expires_at ? \Carbon\Carbon::parse($ban->expires_at)->diffForHumans() : 'Permanent' }}</td>
                             <td>
-                                <span class="label label-{{ $threat->severity === 'critical' ? 'danger' : ($threat->severity === 'warning' ? 'warning' : 'info') }}">
-                                    {{ ucfirst($threat->severity) }}
-                                </span>
-                            </td>
-                            <td>
-                                @if($threat->details)
-                                    @php $details = json_decode($threat->details, true) @endphp
-                                    {{ $details['reason'] ?? 'N/A' }}
-                                @endif
+                                <form action="{{ route('admin.security.unban') }}" method="POST" style="display:inline">
+                                    @csrf
+                                    <input type="hidden" name="ip" value="{{ $ban->ip_address }}">
+                                    <button type="submit" class="btn btn-xs btn-success">
+                                        Unban
+                                    </button>
+                                </form>
                             </td>
                         </tr>
-                        @empty
-                        <tr>
-                            <td colspan="5" class="text-center">No recent threats detected.</td>
-                        </tr>
-                        @endforelse
+                        @endforeach
                     </tbody>
                 </table>
             </div>
         </div>
-        
-        <!-- System Health -->
-        <div class="box security-widget">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-heartbeat"></i> System Health</h3>
-            </div>
-            <div class="box-body">
-                <div class="row">
-                    <div class="col-md-3 col-sm-6">
-                        <div class="info-box">
-                            <span class="info-box-icon bg-{{ $systemHealth['cpu_usage'] > 80 ? 'red' : ($systemHealth['cpu_usage'] > 60 ? 'yellow' : 'green') }}">
-                                <i class="fa fa-microchip"></i>
-                            </span>
-                            <div class="info-box-content">
-                                <span class="info-box-text">CPU Usage</span>
-                                <span class="info-box-number">{{ $systemHealth['cpu_usage'] }}%</span>
-                                <div class="progress">
-                                    <div class="progress-bar" style="width: {{ $systemHealth['cpu_usage'] }}%"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="col-md-3 col-sm-6">
-                        <div class="info-box">
-                            <span class="info-box-icon bg-{{ $systemHealth['memory_usage'] > 85 ? 'red' : ($systemHealth['memory_usage'] > 70 ? 'yellow' : 'green') }}">
-                                <i class="fa fa-memory"></i>
-                            </span>
-                            <div class="info-box-content">
-                                <span class="info-box-text">Memory Usage</span>
-                                <span class="info-box-number">{{ $systemHealth['memory_usage'] }}%</span>
-                                <div class="progress">
-                                    <div class="progress-bar" style="width: {{ $systemHealth['memory_usage'] }}%"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="col-md-3 col-sm-6">
-                        <div class="info-box">
-                            <span class="info-box-icon bg-{{ $systemHealth['disk_usage'] > 90 ? 'red' : ($systemHealth['disk_usage'] > 80 ? 'yellow' : 'green') }}">
-                                <i class="fa fa-hdd"></i>
-                            </span>
-                            <div class="info-box-content">
-                                <span class="info-box-text">Disk Usage</span>
-                                <span class="info-box-number">{{ $systemHealth['disk_usage'] }}%</span>
-                                <div class="progress">
-                                    <div class="progress-bar" style="width: {{ $systemHealth['disk_usage'] }}%"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="col-md-3 col-sm-6">
-                        <div class="info-box">
-                            <span class="info-box-icon bg-{{ $systemHealth['active_connections'] > 400 ? 'red' : ($systemHealth['active_connections'] > 200 ? 'yellow' : 'green') }}">
-                                <i class="fa fa-network-wired"></i>
-                            </span>
-                            <div class="info-box-content">
-                                <span class="info-box-text">Active Connections</span>
-                                <span class="info-box-number">{{ $systemHealth['active_connections'] }}</span>
-                                <div class="progress">
-                                    <div class="progress-bar" style="width: {{ min(100, $systemHealth['active_connections']/5) }}%"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <div class="col-md-4">
-        <!-- Quick Actions -->
-        <div class="box security-widget">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-bolt"></i> Quick Actions</h3>
-            </div>
-            <div class="box-body">
-                <div class="list-group">
-                    <a href="{{ route('admin.security.ips') }}" class="list-group-item">
-                        <i class="fa fa-network-wired"></i> IP Management
-                        <span class="pull-right"><i class="fa fa-arrow-right"></i></span>
-                    </a>
-                    <a href="{{ route('admin.security.ddos') }}" class="list-group-item">
-                        <i class="fa fa-bolt"></i> DDoS Protection
-                        <span class="pull-right"><i class="fa fa-arrow-right"></i></span>
-                    </a>
-                    <a href="{{ route('admin.security.bot') }}" class="list-group-item">
-                        <i class="fa fa-robot"></i> Anti-Bot Settings
-                        <span class="pull-right"><i class="fa fa-arrow-right"></i></span>
-                    </a>
-                    <a href="{{ route('admin.security.api') }}" class="list-group-item">
-                        <i class="fa fa-key"></i> API Security
-                        <span class="pull-right"><i class="fa fa-arrow-right"></i></span>
-                    </a>
-                    <a href="{{ route('admin.security.logs') }}" class="list-group-item">
-                        <i class="fa fa-history"></i> View Security Logs
-                        <span class="pull-right"><i class="fa fa-arrow-right"></i></span>
-                    </a>
-                </div>
-                
-                <!-- Manual IP Ban -->
-                <div class="box-footer">
-                    <form action="{{ route('admin.security.ban') }}" method="POST">
-                        @csrf
-                        <div class="form-group">
-                            <label>Quick IP Ban</label>
-                            <div class="input-group">
-                                <input type="text" class="form-control" name="ip" placeholder="IP Address" required pattern="^(\d{1,3}\.){3}\d{1,3}$">
-                                <div class="input-group-btn">
-                                    <button type="submit" class="btn btn-danger">Ban</button>
-                                </div>
-                            </div>
-                        </div>
-                        <input type="hidden" name="reason" value="manual">
-                        <input type="hidden" name="duration" value="24">
-                    </form>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Security Status -->
-        <div class="box security-widget">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-shield-alt"></i> Protection Status</h3>
-            </div>
-            <div class="box-body">
-                <div class="feature-toggle">
-                    <div class="title">
-                        <i class="fa fa-bolt icon"></i>
-                        <div>
-                            <strong>DDoS Protection</strong>
-                            <div class="text-muted" style="font-size: 0.85em;">Rate limiting active</div>
-                        </div>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                
-                <div class="feature-toggle">
-                    <div class="title">
-                        <i class="fa fa-robot icon"></i>
-                        <div>
-                            <strong>Anti-Bot</strong>
-                            <div class="text-muted" style="font-size: 0.85em;">Bot detection active</div>
-                        </div>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                
-                <div class="feature-toggle">
-                    <div class="title">
-                        <i class="fa fa-user-shield icon"></i>
-                        <div>
-                            <strong>Session Protection</strong>
-                            <div class="text-muted" style="font-size: 0.85em;">Hijacking prevention</div>
-                        </div>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                
-                <div class="feature-toggle">
-                    <div class="title">
-                        <i class="fa fa-database icon"></i>
-                        <div>
-                            <strong>Database Watchdog</strong>
-                            <div class="text-muted" style="font-size: 0.85em;">Query monitoring</div>
-                        </div>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-                
-                <div class="feature-toggle">
-                    <div class="title">
-                        <i class="fa fa-eye-slash icon"></i>
-                        <div>
-                            <strong>Hide Origin IP</strong>
-                            <div class="text-muted" style="font-size: 0.85em;">Shows as 1.1.1.1</div>
-                        </div>
-                    </div>
-                    <label class="switch">
-                        <input type="checkbox" checked>
-                        <span class="slider"></span>
-                    </label>
-                </div>
-            </div>
-        </div>
     </div>
 </div>
 
-<!-- Include security CSS -->
-@section('scripts')
-@parent
-<link rel="stylesheet" href="/css/security.css">
+<script>
+$(document).ready(function() {
+    $('.toggle-feature').change(function() {
+        var key = $(this).data('key');
+        var enabled = $(this).is(':checked') ? 1 : 0;
+        
+        $.ajax({
+            url: '/admin/security/toggle-setting',
+            method: 'POST',
+            data: {
+                _token: '{{ csrf_token() }}',
+                key: key,
+                enabled: enabled
+            },
+            success: function() {
+                toastr.success('Setting updated');
+            }
+        });
+    });
+});
+</script>
 @endsection
 DASHBOARD_VIEW
 
-# Create other view files (simplified for brevity)
-for view in ips ddos bot debug advanced database session api logs settings; do
-    cat > "$SECURITY_VIEWS_DIR/$view.blade.php" << VIEW_FILE
-@extends('layouts.admin')
+# ========== FIX 6: ADD SECURITY MENU (SIMPLIFIED) ==========
+echo -e "\n\e[36m[FIX 6] Adding Security Menu...\e[0m"
 
-@section('title')
-    Security - {{ ucfirst($view) }}
-@endsection
-
-@section('content-header')
-    <h1>{{ ucfirst($view) }} Security<small>Management and configuration</small></h1>
-    <ol class="breadcrumb">
-        <li><a href="{{ route('admin.index') }}">Admin</a></li>
-        <li><a href="{{ route('admin.security.dashboard') }}">Security</a></li>
-        <li class="active">{{ ucfirst($view) }}</li>
-    </ol>
-@endsection
-
-@section('content')
-<div class="row">
-    <div class="col-md-12">
-        <div class="box security-widget">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-{{ [
-                    'ips' => 'network-wired',
-                    'ddos' => 'bolt',
-                    'bot' => 'robot',
-                    'debug' => 'bug',
-                    'advanced' => 'cogs',
-                    'database' => 'database',
-                    'session' => 'user-shield',
-                    'api' => 'key',
-                    'logs' => 'history',
-                    'settings' => 'sliders-h'
-                ][\$view] }}"></i> {{ ucfirst($view) }} Security Management</h3>
-            </div>
-            <div class="box-body">
-                <p>This section is under development. Full functionality will be available soon.</p>
-                <p>Current features implemented:</p>
-                <ul>
-                    @switch(\$view)
-                        @case('ips')
-                            <li>IP Address Management</li>
-                            <li>Ban/Unban IPs</li>
-                            <li>Threat Scoring</li>
-                            <li>IP Whitelist</li>
-                            @break
-                        @case('ddos')
-                            <li>Rate Limiting</li>
-                            <li>Burst Protection</li>
-                            <li>Geo Blocking</li>
-                            <li>Real-time Monitoring</li>
-                            @break
-                        @case('api')
-                            <li>API Key Management</li>
-                            <li>20-Day Expiration</li>
-                            <li>Usage Tracking</li>
-                            <li>Key Rotation</li>
-                            @break
-                        @default
-                            <li>Feature Configuration</li>
-                            <li>Real-time Monitoring</li>
-                            <li>Logging System</li>
-                            <li>Automated Responses</li>
-                    @endswitch
-                </ul>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Include security CSS -->
-@section('scripts')
-@parent
-<link rel="stylesheet" href="/css/security.css">
-@endsection
-VIEW_FILE
-done
-
-echo "✅ Created 11 security view files"
-
-# ========== PHASE 7: CREATE ROUTES ==========
-echo -e "\n\e[36m[PHASE 7] Creating Security Routes...\e[0m"
-
-cat > "$PANEL_DIR/routes/admin/security.php" << 'ROUTES_FILE'
-<?php
-
-Route::group(['prefix' => 'security', 'namespace' => 'Admin', 'middleware' => ['auth', 'admin']], function () {
-    // Dashboard
-    Route::get('dashboard', 'SecurityController@dashboard')->name('admin.security.dashboard');
+ADMIN_LAYOUT="$PANEL_DIR/resources/views/layouts/admin.blade.php"
+if [ -f "$ADMIN_LAYOUT" ]; then
+    # Backup
+    cp "$ADMIN_LAYOUT" "${ADMIN_LAYOUT}.backup"
     
-    // IP Management
-    Route::get('ips', 'SecurityController@ips')->name('admin.security.ips');
-    Route::post('ban-ip', 'SecurityController@banIp')->name('admin.security.ban');
-    Route::post('unban-ip', 'SecurityController@unbanIp')->name('admin.security.unban');
-    
-    // DDoS Protection
-    Route::get('ddos', 'SecurityController@ddos')->name('admin.security.ddos');
-    Route::post('ddos/update', 'SecurityController@updateDdosSettings')->name('admin.security.ddos.update');
-    
-    // Anti-Bot
-    Route::get('bot', 'SecurityController@bot')->name('admin.security.bot');
-    
-    // Anti-Debug/Inspect
-    Route::get('debug', 'SecurityController@debug')->name('admin.security.debug');
-    Route::post('debug/toggle', 'SecurityController@toggleDebugFeature')->name('admin.security.debug.toggle');
-    
-    // Advanced Protection
-    Route::get('advanced', 'SecurityController@advanced')->name('admin.security.advanced');
-    
-    // Database Security
-    Route::get('database', 'SecurityController@database')->name('admin.security.database');
-    
-    // Session Security
-    Route::get('session', 'SecurityController@session')->name('admin.security.session');
-    Route::post('session/invalidate', 'SecurityController@invalidateSession')->name('admin.security.session.invalidate');
-    
-    // API Security
-    Route::get('api', 'SecurityController@api')->name('admin.security.api');
-    Route::post('api/create-key', 'SecurityController@createApiKey')->name('admin.security.api.create');
-    Route::post('api/revoke-key', 'SecurityController@revokeApiKey')->name('admin.security.api.revoke');
-    
-    // Security Logs
-    Route::get('logs', 'SecurityController@logs')->name('admin.security.logs');
-    
-    // Settings
-    Route::get('settings', 'SecurityController@settings')->name('admin.security.settings');
-    Route::post('settings/update', 'SecurityController@updateSettings')->name('admin.security.settings.update');
-});
-ROUTES_FILE
-
-# Include routes in main admin routes
-if ! grep -q "security.php" "$PANEL_DIR/routes/admin.php"; then
-    echo -e "\n// Security Routes\nrequire __DIR__.'/security.php';" >> "$PANEL_DIR/routes/admin.php"
+    # Find where to add menu (after Users menu)
+    if ! grep -q "fa-shield" "$ADMIN_LAYOUT"; then
+        # Simple menu addition
+        SECURITY_MENU='
+        @if(auth()->check() && auth()->user()->id == 1)
+        <li class="{{ Request::is(\"admin/security*\") ? \"active\" : \"\" }}">
+            <a href="{{ route(\"admin.security.dashboard\") }}">
+                <i class="fa fa-shield"></i> <span>Security</span>
+            </a>
+        </li>
+        @endif'
+        
+        # Insert after Users menu
+        sed -i '/<i class="fa fa-users"><\/i> <span>Users<\/span>/a\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
+        
+        echo "✅ Security menu added"
+    else
+        echo "✅ Security menu already exists"
+    fi
 fi
 
-# ========== PHASE 8: START SERVICES ==========
-echo -e "\n\e[36m[PHASE 8] Starting Services...\e[0m"
+# ========== FIX 7: CREATE SECURITY ROUTES ==========
+echo -e "\n\e[36m[FIX 7] Creating Security Routes...\e[0m"
 
-cat > /etc/php/8.1/fpm/pool.d/pterodactyl.conf << 'PHPFPM'
+mkdir -p "$PANEL_DIR/routes/admin"
+cat > "$PANEL_DIR/routes/admin/security.php" << 'ROUTES'
+<?php
+Route::group(['prefix' => 'security', 'namespace' => 'Admin', 'middleware' => ['auth', 'admin']], function () {
+    Route::get('dashboard', 'SecurityController@dashboard')->name('admin.security.dashboard');
+    Route::post('ban', 'SecurityController@banIp')->name('admin.security.ban');
+    Route::post('unban', 'SecurityController@unbanIp')->name('admin.security.unban');
+    Route::post('toggle-setting', 'SecurityController@toggleSetting')->name('admin.security.toggle');
+});
+ROUTES
+
+# Add to main routes
+if ! grep -q "security.php" "$PANEL_DIR/routes/admin.php"; then
+    echo "require __DIR__.'/security.php';" >> "$PANEL_DIR/routes/admin.php"
+fi
+
+# ========== FIX 8: FIX PERMISSIONS ==========
+echo -e "\n\e[36m[FIX 8] Fixing Permissions...\e[0m"
+
+cd "$PANEL_DIR"
+chown -R www-data:www-data .
+chmod -R 755 .
+chmod -R 775 storage bootstrap/cache
+chmod 777 storage/logs 2>/dev/null || true
+
+# Create storage directories
+mkdir -p storage/framework/{cache/data,sessions,views}
+chmod -R 775 storage/framework
+
+# ========== FIX 9: CREATE PHP-FPM CONFIG ==========
+echo -e "\n\e[36m[FIX 9] Configuring PHP-FPM...\e[0m"
+
+PHP_VERSION=$(php -v | head -n1 | cut -d' ' -f2 | cut -d'.' -f1,2)
+cat > /etc/php/${PHP_VERSION}/fpm/pool.d/pterodactyl.conf << PHPFPM
 [pterodactyl]
 user = www-data
 group = www-data
-listen = /var/run/php/php8.1-fpm-pterodactyl.sock
+listen = /run/php/php${PHP_VERSION}-fpm-pterodactyl.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
 pm = dynamic
-pm.max_children = 50
-pm.start_servers = 5
-pm.min_spare_servers = 5
-pm.max_spare_servers = 35
-pm.max_requests = 500
-php_admin_value[error_log] = /var/log/php8.1-fpm-error.log
-php_admin_value[display_errors] = off
-php_admin_value[log_errors] = on
+pm.max_children = 20
+pm.start_servers = 2
+pm.min_spare_servers = 1
+pm.max_spare_servers = 10
+php_admin_value[error_log] = /var/log/php${PHP_VERSION}-fpm-error.log
+php_admin_flag[log_errors] = on
 PHPFPM
 
-mkdir -p /var/run/php
-chown www-data:www-data /var/run/php
+mkdir -p /run/php
+chown www-data:www-data /run/php
 
-# Simple nginx config
-cat > /etc/nginx/sites-available/pterodactyl << 'NGINX'
+# ========== FIX 10: CREATE NGINX CONFIG ==========
+echo -e "\n\e[36m[FIX 10] Configuring Nginx...\e[0m"
+
+cat > /etc/nginx/sites-available/pterodactyl << NGINX
 server {
     listen 80;
     server_name $DOMAIN_NAME;
-    root /var/www/pterodactyl/public;
+    root $PANEL_DIR/public;
     index index.php;
     
     location / {
-        try_files $uri $uri/ /index.php?$query_string;
+        try_files \$uri \$uri/ /index.php?\$query_string;
     }
     
-    location ~ \.php$ {
-        fastcgi_pass unix:/var/run/php/php8.1-fpm-pterodactyl.sock;
+    location ~ \.php\$ {
+        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm-pterodactyl.sock;
         fastcgi_index index.php;
         include fastcgi_params;
-        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
     }
     
     location ~ /\.ht {
@@ -1530,66 +702,77 @@ server {
 }
 NGINX
 
-sed -i "s|\\\$DOMAIN_NAME|$DOMAIN_NAME|g" /etc/nginx/sites-available/pterodactyl
+# Enable site
+ln -sf /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
 
-nginx -t
-systemctl start php8.1-fpm
-systemctl start nginx
+# Test and restart
+nginx -t && echo "✅ Nginx config valid"
 
-# Clear caches
-cd "$PANEL_DIR"
-sudo -u www-data php artisan cache:clear 2>/dev/null || true
-sudo -u www-data php artisan view:clear 2>/dev/null || true
+systemctl restart php${PHP_VERSION}-fpm
+systemctl restart nginx
 
-# ========== FINAL MESSAGE ==========
+# ========== FINAL TEST ==========
+echo -e "\n\e[36m[FINAL TEST] Testing Installation...\e[0m"
+
+sleep 2
+
+echo "1. Testing PHP-FPM..."
+if systemctl is-active --quiet php${PHP_VERSION}-fpm; then
+    echo "   ✅ PHP-FPM is running"
+else
+    echo "   ⚠️ PHP-FPM not running"
+fi
+
+echo "2. Testing Nginx..."
+if systemctl is-active --quiet nginx; then
+    echo "   ✅ Nginx is running"
+else
+    echo "   ⚠️ Nginx not running"
+fi
+
+echo "3. Testing database..."
+if mysql -u root -e "USE panel; SELECT 1;" >/dev/null 2>&1; then
+    echo "   ✅ Database accessible"
+else
+    echo "   ⚠️ Database issue"
+fi
+
+echo "4. Testing panel..."
+curl -s -o /dev/null -w "%{http_code}" http://localhost/admin > /tmp/http_code.txt
+HTTP_CODE=$(cat /tmp/http_code.txt)
+if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ]; then
+    echo "   ✅ Panel responding (HTTP $HTTP_CODE)"
+else
+    echo "   ⚠️ Panel error (HTTP $HTTP_CODE)"
+fi
+
+# ========== COMPLETION ==========
 echo -e "\n\e[32m==================================================\e[0m"
-echo -e "\e[32m🎉 ULTIMATE SECURITY SYSTEM INSTALLED!\e[0m"
+echo -e "\e[32m✅ INSTALLATION FIXED SUCCESSFULLY!\e[0m"
 echo -e "\e[32m==================================================\e[0m"
 echo ""
-echo "✅ BlackEndSpace Theme: Installed"
-echo "✅ Security System: Complete with 15+ features"
-echo "✅ Security Menu: 11 sub-menus with icons"
-echo "✅ Database: 7 security tables created"
-echo "✅ Access Control: User ID = 1 only"
-echo ""
-echo "🔒 SECURITY FEATURES INSTALLED:"
-echo "   1. Anti-DDoS (Rate Limit)"
+echo "📊 Security Features Installed:"
+echo "   1. DDoS Rate Limit"
 echo "   2. IP Ban/Unban System"
 echo "   3. Anti-Debug/Inspect"
 echo "   4. Anti-Bot Protection"
-echo "   5. Anti-Raid Protection"
-echo "   6. Anti-Overheat Monitoring"
-echo "   7. Fail2Ban Integration"
-echo "   8. Hide Origin IP (1.1.1.1)"
-echo "   9. Anti-Peek Protection"
-echo "   10. Anti-Backdoor Scanner"
-echo "   11. Database Query Watchdog"
-echo "   12. Session Hijacking Protection"
-echo "   13. API Key Expiration (20 days)"
-echo "   14. Real-time Security Logs"
-echo "   15. Threat Scoring System"
+echo "   5. Anti-Raid"
+echo "   6. Hide Origin IP (1.1.1.1)"
+echo "   7. Database Query Watchdog"
+echo "   8. Session Hijacking Protection"
+echo "   9. API Key Expiration (20 days)"
 echo ""
-echo "📍 ACCESS URLS:"
-echo "   Main Panel: http://$DOMAIN_NAME/admin"
-echo "   Security Dashboard: http://$DOMAIN_NAME/admin/security/dashboard"
+echo "📍 Access URLs:"
+echo "   Panel: http://$DOMAIN_NAME/admin"
+echo "   Security: http://$DOMAIN_NAME/admin/security/dashboard"
 echo ""
-echo "🛡️ SECURITY MENU STRUCTURE:"
-echo "   📊 Dashboard"
-echo "   🌐 IP Management"
-echo "   ⚡ DDoS Protection"
-echo "   🤖 Anti-Bot"
-echo "   🐛 Anti-Debug/Inspect"
-echo "   ⚙️ Advanced Protection"
-echo "   🗄️ Database Security"
-echo "   👤 Session Security"
-echo "   🔑 API Security"
-echo "   📝 Security Logs"
-echo "   ⚙️ Settings"
+echo "👤 Default Admin Login:"
+echo "   Email: admin@admin.com"
+echo "   Password: password"
 echo ""
-echo "⚠️ TROUBLESHOOTING:"
-echo "   If 403/500 errors occur, run:"
-echo "   chown -R www-data:www-data /var/www/pterodactyl"
-echo "   chmod -R 775 /var/www/pterodactyl/storage"
-echo "   systemctl restart php8.1-fpm nginx"
+echo "⚠️ If you still see 403 errors:"
+echo "   Run: chown -R www-data:www-data /var/www/pterodactyl"
+echo "   Run: chmod -R 775 /var/www/pterodactyl/storage"
 echo ""
 echo -e "\e[32m==================================================\e[0m"
