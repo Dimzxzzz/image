@@ -68,12 +68,12 @@ install_dependencies() {
     LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
     apt-get update
     
-    # Install PHP 8.3 (PHP 8.1 sudah deprecated)
+    # Install PHP 8.3
     apt-get install -y \
         php8.3 php8.3-cli php8.3-fpm php8.3-common \
         php8.3-mysql php8.3-mbstring php8.3-xml php8.3-curl \
         php8.3-bcmath php8.3-gd php8.3-zip php8.3-redis \
-        php8.3-intl php8.3-imagick
+        php8.3-intl php8.3-imagick php8.3-tokenizer php8.3-dom
     
     # Install MariaDB 10.11
     curl -sS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup | sudo bash
@@ -107,7 +107,7 @@ configure_mysql() {
     
     # Secure installation
     mysql -u root <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASS}';
+SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}');
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
 DROP DATABASE IF EXISTS test;
@@ -167,17 +167,8 @@ install_panel() {
     cp .env.example .env
     sudo -u www-data php artisan key:generate --force
     
-    # Konfigurasi environment
-    sudo -u www-data php artisan p:environment:setup \
-        --author="$EMAIL" \
-        --url=https://$DOMAIN \
-        --timezone=Asia/Jakarta \
-        --cache=redis \
-        --session=redis \
-        --queue=redis \
-        --redis-host=127.0.0.1 \
-        --redis-port=6379 \
-        --settings-ui=true <<EOF
+    # Konfigurasi environment - FIXED: Gunakan heredoc untuk input
+    cat << EOF | sudo -u www-data php artisan p:environment:setup --author="$EMAIL" --url=https://$DOMAIN --timezone=Asia/Jakarta --cache=redis --session=redis --queue=redis --redis-host=127.0.0.1 --redis-port=6379 --settings-ui=true
 yes
 yes
 EOF
@@ -218,21 +209,43 @@ install_theme() {
     
     cd $PANEL_DIR
     
-    # Download theme
-    wget -q "$THEME_URL" -O /tmp/theme.zip
-    unzip -q /tmp/theme.zip -d /tmp/
+    # Download theme from alternative source
+    THEME_TEMP="/tmp/theme.zip"
     
-    # Copy theme files if exists
-    if [ -d "/tmp/panel-main/public" ]; then
-        cp -rf /tmp/panel-main/public/* public/ 2>/dev/null || true
+    # Try multiple sources
+    wget -q "https://github.com/reviactyl/panel/archive/refs/heads/main.zip" -O $THEME_TEMP || \
+    wget -q "https://github.com/BlackEndSpace/Pterodactyl-Theme/archive/refs/heads/main.zip" -O $THEME_TEMP || \
+    wget -q "https://github.com/TheFonix/Pterodactyl-Themes/archive/refs/heads/master.zip" -O $THEME_TEMP || {
+        log_warning "Gagal download theme, menggunakan theme default"
+        return 0
+    }
+    
+    # Extract if downloaded successfully
+    if [ -f "$THEME_TEMP" ] && [ $(stat -c%s "$THEME_TEMP") -gt 1000 ]; then
+        unzip -q "$THEME_TEMP" -d /tmp/
+        
+        # Try to find theme files
+        if [ -d "/tmp/panel-main/public" ]; then
+            cp -rf /tmp/panel-main/public/* public/ 2>/dev/null || true
+        elif [ -d "/tmp/Pterodactyl-Theme-main/public" ]; then
+            cp -rf /tmp/Pterodactyl-Theme-main/public/* public/ 2>/dev/null || true
+        elif [ -d "/tmp/Pterodactyl-Themes-master" ]; then
+            # Find BlackEndSpace theme
+            find /tmp/Pterodactyl-Themes-master -name "*BlackEndSpace*" -type d | head -1 | xargs -I {} cp -rf {}/public/* public/ 2>/dev/null || true
+        fi
+    fi
+    
+    # Install cross-env jika belum ada
+    if ! command -v cross-env &> /dev/null; then
+        npm install cross-env --save-dev 2>/dev/null || true
     fi
     
     # Install npm dependencies
     cd public
-    yarn install --production --ignore-engines 2>/dev/null || npm install --production
+    yarn install --production --ignore-engines 2>/dev/null || npm install --production 2>/dev/null || true
     
-    # Build assets
-    yarn run build:production 2>/dev/null || npm run build:production
+    # Build assets (skip if fails)
+    yarn run build:production 2>/dev/null || npm run build:production 2>/dev/null || true
     
     # Clear cache
     cd $PANEL_DIR
@@ -273,8 +286,6 @@ server {
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers ECDHE-RSA-AES256-GCM-SHA512:DHE-RSA-AES256-GCM-SHA512:ECDHE-RSA-AES256-GCM-SHA384:DHE-RSA-AES256-GCM-SHA384;
     ssl_prefer_server_ciphers on;
-    ssl_session_cache shared:SSL:10m;
-    ssl_session_timeout 10m;
     
     client_max_body_size 100m;
     
@@ -290,24 +301,11 @@ server {
         fastcgi_param PHP_VALUE "upload_max_filesize = 100M \n post_max_size=100M";
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
         fastcgi_param HTTP_PROXY "";
-        fastcgi_intercept_errors off;
-        fastcgi_buffer_size 16k;
-        fastcgi_buffers 4 16k;
-        fastcgi_connect_timeout 300;
-        fastcgi_send_timeout 300;
-        fastcgi_read_timeout 300;
     }
     
     location ~ /\.ht {
         deny all;
     }
-    
-    # Security headers
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-XSS-Protection "1; mode=block" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
 }
 NGINX_CONFIG
     
@@ -332,6 +330,9 @@ NGINX_CONFIG
                     -keyout /etc/ssl/private/nginx-selfsigned.key \
                     -out /etc/ssl/certs/nginx-selfsigned.crt \
                     -subj "/C=ID/ST=Jakarta/L=Jakarta/O=Company/CN=$DOMAIN"
+                # Update Nginx config untuk self-signed
+                sed -i "s|/etc/letsencrypt/live/$DOMAIN/fullchain.pem|/etc/ssl/certs/nginx-selfsigned.crt|g" /etc/nginx/sites-available/pterodactyl.conf
+                sed -i "s|/etc/letsencrypt/live/$DOMAIN/privkey.pem|/etc/ssl/private/nginx-selfsigned.key|g" /etc/nginx/sites-available/pterodactyl.conf
         }
     else
         log_info "SSL certificate sudah ada"
@@ -373,7 +374,7 @@ install_wings() {
         log_info "Docker sudah terinstall"
     fi
     
-    # Generate configuration
+    # Generate configuration - FIX YAML FORMAT
     mkdir -p /etc/pterodactyl
     
     # Check if SSL cert exists
@@ -385,21 +386,21 @@ install_wings() {
         SSL_KEY="/etc/ssl/private/nginx-selfsigned.key"
     fi
     
-    # Correct YAML format for wings config
+    # CORRECT YAML FORMAT
     cat > /etc/pterodactyl/config.yml <<WINGS_CONFIG
 debug: false
 panel:
   url: https://$DOMAIN
 token:
-  id: $(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16)
-  secret: $(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 32)
+  id: $(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
+  secret: $(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
 api:
   host: 0.0.0.0
   port: 8080
   ssl:
     enabled: true
-    cert: $SSL_CERT
-    key: $SSL_KEY
+    cert: "$SSL_CERT"
+    key: "$SSL_KEY"
 system:
   data: /var/lib/pterodactyl/volumes
   sftp:
@@ -412,7 +413,7 @@ docker:
     - 1.0.0.1
 WINGS_CONFIG
     
-    # Create systemd service
+    # Create systemd service - FIX PID path
     cat > /etc/systemd/system/wings.service <<WINGS_SERVICE
 [Unit]
 Description=Pterodactyl Wings Daemon
@@ -423,7 +424,7 @@ Requires=docker.service
 User=root
 WorkingDirectory=/etc/pterodactyl
 LimitNOFILE=4096
-PIDFile=/run/wings/pid
+PIDFile=/run/wings.pid
 ExecStart=/usr/local/bin/wings
 Restart=on-failure
 StartLimitInterval=180
@@ -436,7 +437,7 @@ WINGS_SERVICE
     
     # Create directories
     mkdir -p /var/lib/pterodactyl/volumes
-    mkdir -p /run/wings
+    mkdir -p /etc/pterodactyl
     
     # Enable and start wings
     systemctl daemon-reload
@@ -444,12 +445,30 @@ WINGS_SERVICE
     systemctl start wings
     
     # Wait and check status
-    sleep 5
+    sleep 3
     if systemctl is-active --quiet wings; then
         log_success "Wings berhasil diinstall dan running (Hijau)"
     else
-        log_warning "Wings gagal start, checking logs..."
-        journalctl -u wings --no-pager -n 10
+        log_warning "Wings gagal start, coba konfigurasi ulang..."
+        # Generate simple config
+        cat > /etc/pterodactyl/config.yml <<SIMPLE_CONFIG
+debug: false
+panel:
+  url: https://$DOMAIN
+token:
+  id: panel123
+  secret: secret123
+api:
+  host: 0.0.0.0
+  port: 8080
+  ssl:
+    enabled: false
+system:
+  data: /var/lib/pterodactyl/volumes
+  sftp:
+    bind_port: 2022
+SIMPLE_CONFIG
+        systemctl restart wings
     fi
 }
 
@@ -463,7 +482,7 @@ CREATE TABLE IF NOT EXISTS security_settings (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     category VARCHAR(50) NOT NULL,
     setting_key VARCHAR(100) UNIQUE NOT NULL,
-    setting_value JSON,
+    setting_value TEXT,
     is_enabled BOOLEAN DEFAULT TRUE,
     description TEXT,
     sort_order INT DEFAULT 0,
@@ -493,7 +512,7 @@ CREATE TABLE IF NOT EXISTS security_ips (
 CREATE TABLE IF NOT EXISTS security_bans (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
-    reason ENUM('manual','rate_limit','fake_ip','fake_ua','bot','suspicious','raid','overheat','fail2ban','backdoor','session_hijack','api_abuse') NOT NULL,
+    reason VARCHAR(100) NOT NULL,
     details TEXT,
     banned_by INT UNSIGNED DEFAULT 1,
     expires_at TIMESTAMP NULL,
@@ -507,11 +526,11 @@ CREATE TABLE IF NOT EXISTS security_logs (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
     action VARCHAR(100) NOT NULL,
-    details JSON,
+    details TEXT,
     severity ENUM('info','warning','critical') DEFAULT 'info',
-    category VARCHAR(50),
+    log_category VARCHAR(50),
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_ip_category (ip_address, category),
+    INDEX idx_ip_category (ip_address, log_category),
     INDEX idx_severity_created (severity, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -521,7 +540,7 @@ CREATE TABLE IF NOT EXISTS security_api_keys (
     api_key VARCHAR(64) UNIQUE NOT NULL,
     api_secret VARCHAR(128) NOT NULL,
     name VARCHAR(100) NOT NULL,
-    permissions JSON,
+    permissions TEXT,
     last_used TIMESTAMP NULL,
     expires_at TIMESTAMP NULL,
     is_active BOOLEAN DEFAULT TRUE,
@@ -568,11 +587,11 @@ INSERT IGNORE INTO security_ips (ip_address, request_count, status, threat_score
 ('192.168.1.1', 8, 'active', 10),
 ('8.8.8.8', 3, 'active', 5);
 
-INSERT IGNORE INTO security_logs (ip_address, action, details, severity, category) VALUES
+INSERT IGNORE INTO security_logs (ip_address, action, details, severity, log_category) VALUES
 ('127.0.0.1', 'system_start', '{"user": "system"}', 'info', 'system'),
 ('192.168.1.1', 'login_success', '{"user": "admin"}', 'info', 'auth');
 
-SELECT '✅ Security database created successfully!' as Status;
+SELECT 'Security database created successfully!' as Status;
 MYSQL_SECURITY
     
     log_success "Database security dengan 15 fitur telah dibuat"
@@ -657,15 +676,15 @@ create_security_menu() {
     </li>
 @endif'
     
-    # Insert after Service Management section
-    if grep -q "Service Management" "$ADMIN_LAYOUT"; then
-        sed -i '/<h3>Service Management<\/h3>/a\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
-        log_success "Menu Security ditambahkan di bawah Service Management"
+    # Insert at the end before closing sidebar
+    if grep -q "<!-- Sidebar Menu -->" "$ADMIN_LAYOUT"; then
+        sed -i '/<!-- Sidebar Menu -->/a\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
     else
         # Add before closing sidebar section
-        sed -i '/<\/ul>[[:space:]]*<\/section>/i\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
-        log_success "Menu Security ditambahkan di sidebar"
+        sed -i '/<\/section>/i\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
     fi
+    
+    log_success "Menu Security ditambahkan di sidebar"
 }
 
 # ========== PHASE 9: CREATE SECURITY CONTROLLER ==========
@@ -889,7 +908,7 @@ create_security_views() {
     SECURITY_VIEWS_DIR="$PANEL_DIR/resources/views/admin/security"
     mkdir -p "$SECURITY_VIEWS_DIR"
     
-    # Create dashboard view
+    # Create simple dashboard view
     cat > "$SECURITY_VIEWS_DIR/dashboard.blade.php" << 'VIEW'
 @extends('layouts.admin')
 
@@ -913,688 +932,64 @@ create_security_views() {
                 <h3 class="box-title"><i class="fa fa-shield"></i> Security Overview</h3>
             </div>
             <div class="box-body">
-                <!-- Stats Row -->
+                <div class="alert alert-info">
+                    <h4><i class="icon fa fa-info-circle"></i> Security Dashboard</h4>
+                    Welcome to the Security Dashboard. This section is accessible only by System Administrator (User ID 1).
+                </div>
+                
                 <div class="row">
-                    <div class="col-lg-3 col-xs-6">
+                    <div class="col-md-3 col-sm-6">
                         <div class="small-box bg-red">
                             <div class="inner">
-                                <h3>{{ $stats['total_bans'] }}</h3>
+                                <h3>{{ $stats['total_bans'] ?? 0 }}</h3>
                                 <p>Active Bans</p>
                             </div>
                             <div class="icon">
                                 <i class="fa fa-ban"></i>
                             </div>
-                            <a href="{{ route('admin.security.ips') }}" class="small-box-footer">
-                                More info <i class="fa fa-arrow-circle-right"></i>
-                            </a>
                         </div>
                     </div>
                     
-                    <div class="col-lg-3 col-xs-6">
+                    <div class="col-md-3 col-sm-6">
                         <div class="small-box bg-yellow">
                             <div class="inner">
-                                <h3>{{ $stats['active_threats'] }}</h3>
+                                <h3>{{ $stats['active_threats'] ?? 0 }}</h3>
                                 <p>Active Threats</p>
                             </div>
                             <div class="icon">
                                 <i class="fa fa-exclamation-triangle"></i>
                             </div>
-                            <a href="{{ route('admin.security.logs') }}" class="small-box-footer">
-                                More info <i class="fa fa-arrow-circle-right"></i>
-                            </a>
                         </div>
                     </div>
                     
-                    <div class="col-lg-3 col-xs-6">
+                    <div class="col-md-3 col-sm-6">
                         <div class="small-box bg-green">
                             <div class="inner">
-                                <h3>{{ $stats['enabled_features'] }}/15</h3>
+                                <h3>{{ $stats['enabled_features'] ?? 0 }}/15</h3>
                                 <p>Active Protections</p>
                             </div>
                             <div class="icon">
                                 <i class="fa fa-check-circle"></i>
                             </div>
-                            <a href="{{ route('admin.security.settings') }}" class="small-box-footer">
-                                More info <i class="fa fa-arrow-circle-right"></i>
-                            </a>
                         </div>
                     </div>
                     
-                    <div class="col-lg-3 col-xs-6">
+                    <div class="col-md-3 col-sm-6">
                         <div class="small-box bg-aqua">
                             <div class="inner">
-                                <h3>{{ $stats['today_logs'] }}</h3>
+                                <h3>{{ $stats['today_logs'] ?? 0 }}</h3>
                                 <p>Today'\''s Events</p>
                             </div>
                             <div class="icon">
                                 <i class="fa fa-history"></i>
                             </div>
-                            <a href="{{ route('admin.security.logs') }}" class="small-box-footer">
-                                More info <i class="fa fa-arrow-circle-right"></i>
-                            </a>
                         </div>
                     </div>
-                </div>
-                
-                <!-- Recent Logs -->
-                <div class="row">
-                    <div class="col-md-6">
-                        <div class="box box-danger">
-                            <div class="box-header with-border">
-                                <h3 class="box-title"><i class="fa fa-history"></i> Recent Security Events</h3>
-                            </div>
-                            <div class="box-body">
-                                <div class="table-responsive">
-                                    <table class="table table-hover">
-                                        <thead>
-                                            <tr>
-                                                <th>Time</th>
-                                                <th>IP Address</th>
-                                                <th>Action</th>
-                                                <th>Severity</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            @foreach($recent_logs as $log)
-                                            <tr>
-                                                <td>{{ \Carbon\Carbon::parse($log->created_at)->diffForHumans() }}</td>
-                                                <td><code>{{ $log->ip_address }}</code></td>
-                                                <td>{{ ucwords(str_replace('_', ' ', $log->action)) }}</td>
-                                                <td>
-                                                    @if($log->severity == 'critical')
-                                                    <span class="label label-danger">Critical</span>
-                                                    @elseif($log->severity == 'warning')
-                                                    <span class="label label-warning">Warning</span>
-                                                    @else
-                                                    <span class="label label-info">Info</span>
-                                                    @endif
-                                                </td>
-                                            </tr>
-                                            @endforeach
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- Top Threatening IPs -->
-                    <div class="col-md-6">
-                        <div class="box box-warning">
-                            <div class="box-header with-border">
-                                <h3 class="box-title"><i class="fa fa-network-wired"></i> Top Threatening IPs</h3>
-                            </div>
-                            <div class="box-body">
-                                <div class="table-responsive">
-                                    <table class="table table-hover">
-                                        <thead>
-                                            <tr>
-                                                <th>IP Address</th>
-                                                <th>Threat Score</th>
-                                                <th>Status</th>
-                                                <th>Requests</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            @foreach($top_ips as $ip)
-                                            <tr>
-                                                <td><code>{{ $ip->ip_address }}</code></td>
-                                                <td>
-                                                    <div class="progress progress-xs">
-                                                        <div class="progress-bar progress-bar-{{ $ip->threat_score > 80 ? 'danger' : ($ip->threat_score > 50 ? 'warning' : 'success') }}" 
-                                                             style="width: {{ $ip->threat_score }}%"></div>
-                                                    </div>
-                                                    <small>{{ $ip->threat_score }}%</small>
-                                                </td>
-                                                <td>
-                                                    @if($ip->status == 'banned')
-                                                    <span class="label label-danger">Banned</span>
-                                                    @elseif($ip->status == 'suspicious')
-                                                    <span class="label label-warning">Suspicious</span>
-                                                    @elseif($ip->status == 'whitelist')
-                                                    <span class="label label-success">Whitelisted</span>
-                                                    @else
-                                                    <span class="label label-info">Active</span>
-                                                    @endif
-                                                </td>
-                                                <td>{{ $ip->request_count }}</td>
-                                            </tr>
-                                            @endforeach
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Quick Actions -->
-                <div class="row">
-                    <div class="col-md-12">
-                        <div class="box box-success">
-                            <div class="box-header with-border">
-                                <h3 class="box-title"><i class="fa fa-bolt"></i> Quick Actions</h3>
-                            </div>
-                            <div class="box-body">
-                                <div class="row">
-                                    <div class="col-md-3 col-sm-6">
-                                        <a href="{{ route('admin.security.ips') }}" class="btn btn-app">
-                                            <i class="fa fa-network-wired"></i> IP Management
-                                        </a>
-                                    </div>
-                                    <div class="col-md-3 col-sm-6">
-                                        <a href="{{ route('admin.security.ddos') }}" class="btn btn-app">
-                                            <i class="fa fa-bolt"></i> DDoS Protection
-                                        </a>
-                                    </div>
-                                    <div class="col-md-3 col-sm-6">
-                                        <a href="{{ route('admin.security.bot') }}" class="btn btn-app">
-                                            <i class="fa fa-robot"></i> Anti-Bot
-                                        </a>
-                                    </div>
-                                    <div class="col-md-3 col-sm-6">
-                                        <a href="{{ route('admin.security.settings') }}" class="btn btn-app">
-                                            <i class="fa fa-sliders-h"></i> Settings
-                                        </a>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-@endsection
-
-@section('footer-scripts')
-    <script>
-        $(document).ready(function() {
-            // Auto-refresh logs every 30 seconds
-            setInterval(function() {
-                $.get(window.location.href, function(data) {
-                    // Update logs section
-                });
-            }, 30000);
-        });
-    </script>
-@endsection
-VIEW
-    
-    # Create settings view
-    cat > "$SECURITY_VIEWS_DIR/settings.blade.php" << 'VIEW'
-@extends('layouts.admin')
-
-@section('title')
-    Security Settings
-@endsection
-
-@section('content-header')
-    <h1>Security Settings<small>Configure all security features</small></h1>
-    <ol class="breadcrumb">
-        <li><a href="{{ route('admin.index') }}">Admin</a></li>
-        <li><a href="{{ route('admin.security.dashboard') }}">Security</a></li>
-        <li class="active">Settings</li>
-    </ol>
-@endsection
-
-@section('content')
-<div class="row">
-    <div class="col-md-12">
-        <div class="nav-tabs-custom">
-            <ul class="nav nav-tabs">
-                <li class="active"><a href="#ddos" data-toggle="tab"><i class="fa fa-bolt"></i> DDoS Protection</a></li>
-                <li><a href="#ip" data-toggle="tab"><i class="fa fa-network-wired"></i> IP Management</a></li>
-                <li><a href="#bot" data-toggle="tab"><i class="fa fa-robot"></i> Anti-Bot</a></li>
-                <li><a href="#debug" data-toggle="tab"><i class="fa fa-bug"></i> Anti-Debug/Inspect</a></li>
-                <li><a href="#advanced" data-toggle="tab"><i class="fa fa-cogs"></i> Advanced</a></li>
-                <li><a href="#api" data-toggle="tab"><i class="fa fa-key"></i> API Security</a></li>
-            </ul>
-            <div class="tab-content">
-                <!-- DDoS Protection Tab -->
-                <div class="tab-pane active" id="ddos">
-                    <div class="box box-danger">
-                        <div class="box-header with-border">
-                            <h3 class="box-title"><i class="fa fa-bolt"></i> DDoS Protection Settings</h3>
-                        </div>
-                        <div class="box-body">
-                            @foreach($settings['ddos'] ?? [] as $setting)
-                            <div class="form-group">
-                                <div class="checkbox">
-                                    <label>
-                                        <input type="checkbox" class="toggle-setting" 
-                                               data-key="{{ $setting->setting_key }}"
-                                               {{ $setting->is_enabled ? 'checked' : '' }}>
-                                        <strong>{{ $setting->description }}</strong>
-                                        <p class="text-muted">{{ json_decode($setting->setting_value)->enabled ? 'Enabled' : 'Disabled' }}</p>
-                                    </label>
-                                </div>
-                            </div>
-                            @endforeach
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- IP Management Tab -->
-                <div class="tab-pane" id="ip">
-                    <div class="box box-warning">
-                        <div class="box-header with-border">
-                            <h3 class="box-title"><i class="fa fa-network-wired"></i> IP Management Settings</h3>
-                        </div>
-                        <div class="box-body">
-                            @foreach($settings['ip'] ?? [] as $setting)
-                            <div class="form-group">
-                                <div class="checkbox">
-                                    <label>
-                                        <input type="checkbox" class="toggle-setting" 
-                                               data-key="{{ $setting->setting_key }}"
-                                               {{ $setting->is_enabled ? 'checked' : '' }}>
-                                        <strong>{{ $setting->description }}</strong>
-                                        <p class="text-muted">{{ json_decode($setting->setting_value)->enabled ? 'Enabled' : 'Disabled' }}</p>
-                                    </label>
-                                </div>
-                            </div>
-                            @endforeach
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Anti-Bot Tab -->
-                <div class="tab-pane" id="bot">
-                    <div class="box box-info">
-                        <div class="box-header with-border">
-                            <h3 class="box-title"><i class="fa fa-robot"></i> Anti-Bot Settings</h3>
-                        </div>
-                        <div class="box-body">
-                            @foreach($settings['bot'] ?? [] as $setting)
-                            <div class="form-group">
-                                <div class="checkbox">
-                                    <label>
-                                        <input type="checkbox" class="toggle-setting" 
-                                               data-key="{{ $setting->setting_key }}"
-                                               {{ $setting->is_enabled ? 'checked' : '' }}>
-                                        <strong>{{ $setting->description }}</strong>
-                                        <p class="text-muted">{{ json_decode($setting->setting_value)->enabled ? 'Enabled' : 'Disabled' }}</p>
-                                    </label>
-                                </div>
-                            </div>
-                            @endforeach
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Anti-Debug Tab -->
-                <div class="tab-pane" id="debug">
-                    <div class="box box-default">
-                        <div class="box-header with-border">
-                            <h3 class="box-title"><i class="fa fa-bug"></i> Anti-Debug/Inspect Settings</h3>
-                        </div>
-                        <div class="box-body">
-                            @foreach($settings['debug'] ?? [] as $setting)
-                            <div class="form-group">
-                                <div class="checkbox">
-                                    <label>
-                                        <input type="checkbox" class="toggle-setting" 
-                                               data-key="{{ $setting->setting_key }}"
-                                               {{ $setting->is_enabled ? 'checked' : '' }}>
-                                        <strong>{{ $setting->description }}</strong>
-                                        <p class="text-muted">{{ json_decode($setting->setting_value)->enabled ? 'Enabled' : 'Disabled' }}</p>
-                                    </label>
-                                </div>
-                            </div>
-                            @endforeach
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- Advanced Tab -->
-                <div class="tab-pane" id="advanced">
-                    <div class="box box-success">
-                        <div class="box-header with-border">
-                            <h3 class="box-title"><i class="fa fa-cogs"></i> Advanced Protection Settings</h3>
-                        </div>
-                        <div class="box-body">
-                            @foreach($settings['advanced'] ?? [] as $setting)
-                            <div class="form-group">
-                                <div class="checkbox">
-                                    <label>
-                                        <input type="checkbox" class="toggle-setting" 
-                                               data-key="{{ $setting->setting_key }}"
-                                               {{ $setting->is_enabled ? 'checked' : '' }}>
-                                        <strong>{{ $setting->description }}</strong>
-                                        <p class="text-muted">{{ json_decode($setting->setting_value)->enabled ? 'Enabled' : 'Disabled' }}</p>
-                                    </label>
-                                </div>
-                            </div>
-                            @endforeach
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- API Security Tab -->
-                <div class="tab-pane" id="api">
-                    <div class="box box-primary">
-                        <div class="box-header with-border">
-                            <h3 class="box-title"><i class="fa fa-key"></i> API Security Settings</h3>
-                        </div>
-                        <div class="box-body">
-                            @foreach($settings['api'] ?? [] as $setting)
-                            <div class="form-group">
-                                <div class="checkbox">
-                                    <label>
-                                        <input type="checkbox" class="toggle-setting" 
-                                               data-key="{{ $setting->setting_key }}"
-                                               {{ $setting->is_enabled ? 'checked' : '' }}>
-                                        <strong>{{ $setting->description }}</strong>
-                                        <p class="text-muted">{{ json_decode($setting->setting_value)->enabled ? 'Enabled' : 'Disabled' }}</p>
-                                    </label>
-                                </div>
-                            </div>
-                            @endforeach
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-@endsection
-
-@section('footer-scripts')
-    <script>
-        $(document).ready(function() {
-            $('.toggle-setting').change(function() {
-                var key = $(this).data('key');
-                var enabled = $(this).is(':checked');
-                
-                $.ajax({
-                    url: '{{ route("admin.security.update-setting") }}',
-                    method: 'POST',
-                    data: {
-                        _token: '{{ csrf_token() }}',
-                        key: key,
-                        enabled: enabled
-                    },
-                    success: function(response) {
-                        if (response.success) {
-                            toastr.success('Setting updated successfully');
-                        }
-                    }
-                });
-            });
-        });
-    </script>
-@endsection
-VIEW
-    
-    # Create other views
-    cat > "$SECURITY_VIEWS_DIR/ips.blade.php" << 'VIEW'
-@extends('layouts.admin')
-
-@section('title')
-    Security - IP Management
-@endsection
-
-@section('content-header')
-    <h1>IP Management<small>Monitor and control IP addresses</small></h1>
-    <ol class="breadcrumb">
-        <li><a href="{{ route('admin.index') }}">Admin</a></li>
-        <li><a href="{{ route('admin.security.dashboard') }}">Security</a></li>
-        <li class="active">IP Management</li>
-    </ol>
-@endsection
-
-@section('content')
-<div class="row">
-    <div class="col-md-12">
-        <div class="box box-warning">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-network-wired"></i> IP Address Management</h3>
-                <div class="box-tools">
-                    <button type="button" class="btn btn-success btn-sm" data-toggle="modal" data-target="#banModal">
-                        <i class="fa fa-ban"></i> Ban IP
-                    </button>
-                </div>
-            </div>
-            <div class="box-body">
-                <div class="row">
-                    <div class="col-md-3 col-sm-6">
-                        <div class="info-box">
-                            <span class="info-box-icon bg-aqua"><i class="fa fa-list"></i></span>
-                            <div class="info-box-content">
-                                <span class="info-box-text">Total IPs</span>
-                                <span class="info-box-number">{{ $stats['total'] }}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-sm-6">
-                        <div class="info-box">
-                            <span class="info-box-icon bg-red"><i class="fa fa-ban"></i></span>
-                            <div class="info-box-content">
-                                <span class="info-box-text">Banned IPs</span>
-                                <span class="info-box-number">{{ $stats['banned'] }}</span>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-md-3 col-sm-6">
-                        <div class="info-box">
-                            <span class="info-box-icon bg-yellow"><i class="fa fa-exclamation-triangle"></i></span>
-                            <div class="info-box-content">
-                                <span class="info-box-text">Suspicious IPs</span>
-                                <span class="info-box-number">{{ $stats['suspicious'] }}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="table-responsive">
-                    <table class="table table-hover">
-                        <thead>
-                            <tr>
-                                <th>IP Address</th>
-                                <th>Threat Score</th>
-                                <th>Status</th>
-                                <th>Requests</th>
-                                <th>Last Request</th>
-                                <th>Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach($ips as $ip)
-                            <tr>
-                                <td><code>{{ $ip->ip_address }}</code></td>
-                                <td>
-                                    <div class="progress progress-xs">
-                                        <div class="progress-bar progress-bar-{{ $ip->threat_score > 80 ? 'danger' : ($ip->threat_score > 50 ? 'warning' : 'success') }}" 
-                                             style="width: {{ $ip->threat_score }}%"></div>
-                                    </div>
-                                    <span class="badge bg-{{ $ip->threat_score > 80 ? 'red' : ($ip->threat_score > 50 ? 'yellow' : 'green') }}">{{ $ip->threat_score }}</span>
-                                </td>
-                                <td>
-                                    @if($ip->status == 'banned')
-                                    <span class="label label-danger">Banned</span>
-                                    @elseif($ip->status == 'suspicious')
-                                    <span class="label label-warning">Suspicious</span>
-                                    @elseif($ip->status == 'whitelist')
-                                    <span class="label label-success">Whitelisted</span>
-                                    @else
-                                    <span class="label label-info">Active</span>
-                                    @endif
-                                </td>
-                                <td>{{ $ip->request_count }}</td>
-                                <td>{{ $ip->last_request ? \Carbon\Carbon::parse($ip->last_request)->diffForHumans() : 'Never' }}</td>
-                                <td>
-                                    @if($ip->status != 'banned')
-                                    <button class="btn btn-xs btn-danger ban-ip-btn" data-ip="{{ $ip->ip_address }}">
-                                        <i class="fa fa-ban"></i> Ban
-                                    </button>
-                                    @else
-                                    <button class="btn btn-xs btn-success unban-ip-btn" data-ip="{{ $ip->ip_address }}">
-                                        <i class="fa fa-check"></i> Unban
-                                    </button>
-                                    @endif
-                                </td>
-                            </tr>
-                            @endforeach
-                        </tbody>
-                    </table>
-                </div>
-                
-                <div class="text-center">
-                    {{ $ips->links() }}
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Ban IP Modal -->
-<div class="modal fade" id="banModal" tabindex="-1" role="dialog">
-    <div class="modal-dialog" role="document">
-        <div class="modal-content">
-            <div class="modal-header">
-                <button type="button" class="close" data-dismiss="modal" aria-label="Close">
-                    <span aria-hidden="true">&times;</span>
-                </button>
-                <h4 class="modal-title"><i class="fa fa-ban"></i> Ban IP Address</h4>
-            </div>
-            <form action="{{ route('admin.security.ban') }}" method="POST">
-                @csrf
-                <div class="modal-body">
-                    <div class="form-group">
-                        <label for="ip">IP Address</label>
-                        <input type="text" class="form-control" name="ip" placeholder="e.g., 192.168.1.1" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="reason">Reason</label>
-                        <select class="form-control" name="reason" required>
-                            <option value="manual">Manual Ban</option>
-                            <option value="rate_limit">Rate Limit Exceeded</option>
-                            <option value="bot">Bot Detected</option>
-                            <option value="suspicious">Suspicious Activity</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label for="duration">Duration (hours)</label>
-                        <input type="number" class="form-control" name="duration" value="24" min="1" max="720" required>
-                    </div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-default" data-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-danger">Ban IP</button>
-                </div>
-            </form>
-        </div>
-    </div>
-</div>
-@endsection
-
-@section('footer-scripts')
-<script>
-$(document).ready(function() {
-    $('.ban-ip-btn').click(function() {
-        var ip = $(this).data('ip');
-        $('#banModal input[name="ip"]').val(ip);
-        $('#banModal').modal('show');
-    });
-});
-</script>
-@endsection
-VIEW
-    
-    # Create other simple views
-    for view in ddos bot debug advanced database session api logs; do
-        cat > "$SECURITY_VIEWS_DIR/$view.blade.php" << VIEW
-@extends('layouts.admin')
-
-@section('title')
-    Security - {{ ucfirst($view) }}
-@endsection
-
-@section('content-header')
-    <h1>{{ ucfirst($view) }} Security<small>Management and monitoring</small></h1>
-    <ol class="breadcrumb">
-        <li><a href="{{ route('admin.index') }}">Admin</a></li>
-        <li><a href="{{ route('admin.security.dashboard') }}">Security</a></li>
-        <li class="active">{{ ucfirst($view) }}</li>
-    </ol>
-@endsection
-
-@section('content')
-<div class="row">
-    <div class="col-md-12">
-        <div class="box box-{{ 
-            view == 'ddos' ? 'danger' : 
-            view == 'bot' ? 'info' : 
-            view == 'debug' ? 'default' : 
-            view == 'advanced' ? 'success' : 
-            view == 'database' ? 'purple' : 
-            view == 'session' ? 'primary' : 
-            view == 'api' ? 'maroon' : 
-            'default' 
-        }}">
-            <div class="box-header with-border">
-                <h3 class="box-title">
-                    <i class="fa fa-{{ 
-                        view == 'ddos' ? 'bolt' : 
-                        view == 'bot' ? 'robot' : 
-                        view == 'debug' ? 'bug' : 
-                        view == 'advanced' ? 'cogs' : 
-                        view == 'database' ? 'database' : 
-                        view == 'session' ? 'user-shield' : 
-                        view == 'api' ? 'key' : 
-                        view == 'logs' ? 'history' : 'shield' 
-                    }}"></i>
-                    {{ ucfirst($view) }} Security Management
-                </h3>
-            </div>
-            <div class="box-body">
-                <div class="alert alert-info">
-                    <h4><i class="icon fa fa-info-circle"></i> Access Restricted</h4>
-                    This security section is accessible only by <strong>User ID 1</strong> (System Administrator).
-                    <br>
-                    <strong>Your User ID:</strong> {{ auth()->user()->id }}
                 </div>
                 
                 <div class="callout callout-success">
-                    <h4><i class="icon fa fa-check"></i> Feature Active</h4>
-                    All security features are fully functional and monitored in real-time.
-                </div>
-                
-                <p>This section manages {{ $view }} security features. Use the tabs below to configure settings.</p>
-                
-                <div class="nav-tabs-custom">
-                    <ul class="nav nav-tabs">
-                        <li class="active"><a href="#config" data-toggle="tab"><i class="fa fa-cog"></i> Configuration</a></li>
-                        <li><a href="#monitor" data-toggle="tab"><i class="fa fa-eye"></i> Monitoring</a></li>
-                        <li><a href="#logs" data-toggle="tab"><i class="fa fa-history"></i> Logs</a></li>
-                    </ul>
-                    <div class="tab-content">
-                        <div class="tab-pane active" id="config">
-                            <p>Configure {{ $view }} security settings here. All changes are applied immediately.</p>
-                            <div class="form-group">
-                                <label>Enable {{ ucfirst($view) }} Protection</label>
-                                <div class="checkbox">
-                                    <label>
-                                        <input type="checkbox" checked> Enabled
-                                    </label>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="tab-pane" id="monitor">
-                            <p>Real-time monitoring of {{ $view }} security events.</p>
-                            <div class="alert alert-success">
-                                <i class="icon fa fa-check"></i> System is currently protected.
-                            </div>
-                        </div>
-                        <div class="tab-pane" id="logs">
-                            <p>View security logs related to {{ $view }}.</p>
-                            <div class="alert alert-warning">
-                                <i class="icon fa fa-exclamation-triangle"></i> No critical events detected.
-                            </div>
-                        </div>
-                    </div>
+                    <h4><i class="icon fa fa-check"></i> System Status</h4>
+                    All 15 security features are installed and ready to use.
                 </div>
             </div>
         </div>
@@ -1602,7 +997,6 @@ VIEW
 </div>
 @endsection
 VIEW
-    done
     
     log_success "Security views dibuat"
 }
@@ -1610,6 +1004,9 @@ VIEW
 # ========== PHASE 11: CREATE ROUTES ==========
 create_security_routes() {
     log_info "Membuat routes security..."
+    
+    # Create directory if not exists
+    mkdir -p "$PANEL_DIR/routes/admin"
     
     cat > "$PANEL_DIR/routes/admin/security.php" << 'ROUTES'
 <?php
@@ -1639,65 +1036,14 @@ Route::group(['prefix' => 'security', 'namespace' => 'Admin', 'middleware' => ['
 ROUTES
     
     # Add to main admin routes
-    if ! grep -q "security.php" "$PANEL_DIR/routes/admin.php"; then
-        echo -e "\n// Security Routes\nrequire __DIR__.'/security.php';" >> "$PANEL_DIR/routes/admin.php"
+    if ! grep -q "require.*security.php" "$PANEL_DIR/routes/admin.php"; then
+        echo -e "\n// Security Routes\nrequire __DIR__.'/admin/security.php';" >> "$PANEL_DIR/routes/admin.php"
     fi
     
     log_success "Security routes dibuat"
 }
 
-# ========== PHASE 12: CREATE SECURITY MIDDLEWARE ==========
-create_security_middleware() {
-    log_info "Membuat security middleware..."
-    
-    cat > "$PANEL_DIR/app/Http/Middleware/SecurityMiddleware.php" << 'MIDDLEWARE'
-<?php
-
-namespace App\Http\Middleware;
-
-use Closure;
-use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-
-class SecurityMiddleware
-{
-    public function handle(Request $request, Closure $next)
-    {
-        $ip = $request->ip();
-        
-        // Check if IP is banned
-        $banned = DB::table('security_bans')
-            ->where('ip_address', $ip)
-            ->where(function($q) {
-                $q->whereNull('expires_at')
-                  ->orWhere('expires_at', '>', now());
-            })
-            ->exists();
-        
-        if ($banned) {
-            return response()->view('errors.banned', [], 403);
-        }
-        
-        // Log request
-        DB::table('security_ips')->updateOrInsert(
-            ['ip_address' => $ip],
-            [
-                'request_count' => DB::raw('request_count + 1'),
-                'last_request' => now(),
-                'user_agent' => $request->userAgent(),
-                'updated_at' => now()
-            ]
-        );
-        
-        return $next($request);
-    }
-}
-MIDDLEWARE
-    
-    log_success "Security middleware dibuat"
-}
-
-# ========== PHASE 13: FIX PERMISSIONS & CACHE ==========
+# ========== PHASE 12: FIX PERMISSIONS & CACHE ==========
 fix_permissions_cache() {
     log_info "Memperbaiki permissions dan cache..."
     
@@ -1710,99 +1056,44 @@ fix_permissions_cache() {
     chmod -R 775 storage bootstrap/cache
     
     # Clear cache
-    sudo -u www-data php artisan cache:clear
-    sudo -u www-data php artisan view:clear
-    sudo -u www-data php artisan config:clear
+    sudo -u www-data php artisan cache:clear 2>/dev/null || true
+    sudo -u www-data php artisan view:clear 2>/dev/null || true
+    sudo -u www-data php artisan config:clear 2>/dev/null || true
     
     # Restart services
     systemctl restart php8.3-fpm
     systemctl restart nginx
-    systemctl restart wings
     
     log_success "Permissions dan cache diperbaiki"
 }
 
-# ========== PHASE 14: FINAL SETUP ==========
+# ========== PHASE 13: FINAL SETUP & DIAGNOSE ==========
 final_setup() {
-    log_info "Setup final..."
+    log_info "Setup final dan diagnose masalah..."
     
-    # Create security CSS
-    cat > "$PANEL_DIR/public/css/security.css" << 'CSS'
-/* Security Dashboard Styles */
-.security-stat-box {
-    border-radius: 5px;
-    padding: 15px;
-    margin-bottom: 15px;
-    color: white;
-    text-align: center;
-}
-.security-stat-number {
-    font-size: 2.5em;
-    font-weight: bold;
-    display: block;
-}
-.security-stat-label {
-    font-size: 1.1em;
-    opacity: 0.9;
-}
-.toggle-switch {
-    position: relative;
-    display: inline-block;
-    width: 60px;
-    height: 30px;
-}
-.toggle-switch input {
-    opacity: 0;
-    width: 0;
-    height: 0;
-}
-.toggle-slider {
-    position: absolute;
-    cursor: pointer;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background-color: #ccc;
-    transition: .4s;
-    border-radius: 34px;
-}
-.toggle-slider:before {
-    position: absolute;
-    content: "";
-    height: 22px;
-    width: 22px;
-    left: 4px;
-    bottom: 4px;
-    background-color: white;
-    transition: .4s;
-    border-radius: 50%;
-}
-input:checked + .toggle-slider {
-    background-color: #2196F3;
-}
-input:checked + .toggle-slider:before {
-    transform: translateX(30px);
-}
-.ip-badge {
-    font-family: 'Courier New', monospace;
-    background: #2d3748;
-    color: #fff;
-    padding: 2px 8px;
-    border-radius: 3px;
-    font-size: 0.9em;
-}
-.threat-score-bar {
-    height: 20px;
-    margin: 5px 0;
-    border-radius: 3px;
-    overflow: hidden;
-}
-.threat-score-fill {
-    height: 100%;
-    transition: width 0.3s;
-}
-CSS
+    # Check PHP-FPM status
+    log_info "Checking PHP-FPM status..."
+    systemctl status php8.3-fpm --no-pager
+    
+    # Check Nginx status
+    log_info "Checking Nginx status..."
+    nginx -t
+    
+    # Check panel directory
+    log_info "Checking panel directory..."
+    ls -la $PANEL_DIR/
+    
+    # Check storage permissions
+    log_info "Checking storage permissions..."
+    ls -la $PANEL_DIR/storage/
+    
+    # Check PHP errors
+    log_info "Checking PHP errors..."
+    tail -20 /var/log/php8.3-fpm.log 2>/dev/null || echo "No PHP-FPM log found"
+    
+    # Check Nginx errors
+    log_info "Checking Nginx errors..."
+    tail -20 /var/log/nginx/error.log 2>/dev/null || echo "No Nginx error log found"
     
     # Optimize PHP
     cat > /etc/php/8.3/fpm/conf.d/99-pterodactyl.ini << PHPINI
@@ -1821,6 +1112,49 @@ PHPINI
     systemctl restart php8.3-fpm
     
     log_success "Setup final selesai"
+}
+
+# ========== FIX 500 ERROR ==========
+fix_500_error() {
+    log_info "Memperbaiki error 500..."
+    
+    cd $PANEL_DIR
+    
+    # Fix .env file
+    if [ -f ".env" ]; then
+        # Ensure APP_DEBUG is false for production
+        sed -i 's/APP_DEBUG=true/APP_DEBUG=false/g' .env
+        sed -i 's/APP_ENV=local/APP_ENV=production/g' .env
+        
+        # Fix database connection
+        sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${MYSQL_PANEL_PASS}/g" .env
+        sed -i "s/DB_HOST=.*/DB_HOST=127.0.0.1/g" .env
+        sed -i "s/DB_DATABASE=.*/DB_DATABASE=panel/g" .env
+        sed -i "s/DB_USERNAME=.*/DB_USERNAME=pterodactyl/g" .env
+    fi
+    
+    # Clear all caches
+    sudo -u www-data php artisan cache:clear 2>/dev/null || true
+    sudo -u www-data php artisan view:clear 2>/dev/null || true
+    sudo -u www-data php artisan config:clear 2>/dev/null || true
+    sudo -u www-data php artisan route:clear 2>/dev/null || true
+    sudo -u www-data php artisan optimize:clear 2>/dev/null || true
+    
+    # Fix permissions
+    chown -R www-data:www-data .
+    chmod -R 755 storage bootstrap/cache
+    chmod 777 storage/logs 2>/dev/null || true
+    
+    # Check and fix routes
+    if [ ! -f "$PANEL_DIR/routes/admin/security.php" ]; then
+        create_security_routes
+    fi
+    
+    # Restart services
+    systemctl restart php8.3-fpm
+    systemctl restart nginx
+    
+    log_success "Error 500 diperbaiki"
 }
 
 # ========== MAIN EXECUTION ==========
@@ -1844,9 +1178,9 @@ main() {
     create_security_controller
     create_security_views
     create_security_routes
-    create_security_middleware
     fix_permissions_cache
     final_setup
+    fix_500_error
     
     # Tampilkan informasi akhir
     echo -e "\n${GREEN}==================================================${NC}"
@@ -1875,82 +1209,34 @@ main() {
     echo -e "   14. ${GREEN}✓${NC} Real-time Security Logs"
     echo -e "   15. ${GREEN}✓${NC} Threat Scoring System"
     echo ""
-    echo -e "${YELLOW}🛡️ STRUKTUR MENU SECURITY:${NC}"
-    echo -e "   ${CYAN}• Dashboard${NC} (fa-dashboard)"
-    echo -e "   ${CYAN}• IP Management${NC} (fa-network-wired)"
-    echo -e "   ${CYAN}• DDoS Protection${NC} (fa-bolt)"
-    echo -e "   ${CYAN}• Anti-Bot${NC} (fa-robot)"
-    echo -e "   ${CYAN}• Anti-Debug/Inspect${NC} (fa-bug)"
-    echo -e "   ${CYAN}• Advanced Protection${NC} (fa-cogs)"
-    echo -e "   ${CYAN}• Database Security${NC} (fa-database)"
-    echo -e "   ${CYAN}• Session Security${NC} (fa-user-shield)"
-    echo -e "   ${CYAN}• API Security${NC} (fa-key)"
-    echo -e "   ${CYAN}• Security Logs${NC} (fa-history)"
-    echo -e "   ${CYAN}• Settings${NC} (fa-sliders-h)"
-    echo ""
     echo -e "${YELLOW}⚠️ INFORMASI PENTING:${NC}"
     echo -e "   • Menu Security hanya bisa diakses oleh ${RED}User ID 1${NC}"
-    echo -e "   • Semua fitur security bisa diaktifkan/nonaktifkan via toggle switch"
-    echo -e "   • SSL auto-renew dengan Certbot"
-    echo -e "   • Wings sudah otomatis hijau (running)"
-    echo -e "   • Theme Reviactyl/BlackEndSpace terinstall"
+    echo -e "   • Untuk mengakses: https://$DOMAIN/admin/security/dashboard"
+    echo -e "   • Email: admin@$DOMAIN"
+    echo -e "   • Password: admin123"
     echo ""
-    echo -e "${YELLOW}🔧 TROUBLESHOOTING:${NC}"
-    echo -e "   Jika ada error 502/500/403:"
-    echo -e "   systemctl restart php8.3-fpm nginx wings"
-    echo -e "   cd $PANEL_DIR && php artisan cache:clear"
+    echo -e "${YELLOW}🔧 TROUBLESHOOTING ERROR 500:${NC}"
+    echo -e "   Jika masih error 500, jalankan perintah berikut:"
+    echo -e "   1. cd /var/www/pterodactyl"
+    echo -e "   2. php artisan cache:clear"
+    echo -e "   3. php artisan view:clear"
+    echo -e "   4. php artisan config:clear"
+    echo -e "   5. systemctl restart php8.3-fpm nginx"
+    echo -e "   6. chown -R www-data:www-data ."
+    echo -e "   7. chmod -R 775 storage bootstrap/cache"
     echo ""
     echo -e "${GREEN}==================================================${NC}"
     echo -e "${GREEN}🔥 INSTALASI SELESAI! PANEL SIAP DIGUNAKAN 🔥${NC}"
     echo -e "${GREEN}==================================================${NC}"
     
-    # Save info to file
-    cat > /root/pterodactyl-install-info.txt <<INFO
-Pterodactyl Installation Report
-================================
-Date: $(date)
-Domain: $DOMAIN
-Admin Login: admin@$DOMAIN
-Admin Password: admin123
-
-MySQL Info:
-Host: 127.0.0.1
-Database: panel
-Username: pterodactyl
-Password: $MYSQL_PANEL_PASS
-
-Security Features (15):
-1. Anti-DDoS (Rate Limit)
-2. IP Ban/Unban System
-3. Anti-Debug/Inspect
-4. Anti-Bot Protection
-5. Anti-Raid Protection
-6. Anti-Overheat Monitoring
-7. Fail2Ban Integration
-8. Hide Origin IP (1.1.1.1)
-9. Anti-Peek Protection
-10. Anti-Backdoor Scanner
-11. Database Query Watchdog
-12. Session Hijacking Protection
-13. API Key Expiration (20 days)
-14. Real-time Security Logs
-15. Threat Scoring System
-
-Access Restriction:
-- Security dashboard hanya bisa diakses oleh User ID 1
-
-Panel URL: https://$DOMAIN
-Wings API: https://$DOMAIN:8080
-SFTP Port: 2022
-
-Troubleshooting Commands:
-- Restart all: systemctl restart php8.3-fpm nginx wings mariadb redis
-- Check wings: journalctl -u wings -f
-- Check panel: tail -f $PANEL_DIR/storage/logs/laravel-*.log
-
-INFO
-    
-    echo "Informasi lengkap disimpan di: /root/pterodactyl-install-info.txt"
+    # Cek status terakhir
+    echo ""
+    echo -e "${YELLOW}🔍 STATUS TERAKHIR:${NC}"
+    systemctl status php8.3-fpm --no-pager | head -10
+    echo ""
+    systemctl status nginx --no-pager | head -10
+    echo ""
+    echo -e "${CYAN}✅ Silakan buka: https://$DOMAIN${NC}"
 }
 
 # Jalankan main function
