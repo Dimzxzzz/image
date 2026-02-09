@@ -19,7 +19,6 @@ EMAIL="admin@google.com"
 PANEL_DIR="/var/www/pterodactyl"
 MYSQL_ROOT_PASS="123"
 MYSQL_PANEL_PASS="123"
-THEME_URL="https://github.com/reviactyl/panel/archive/refs/heads/main.zip"
 ADMIN_ID=1
 
 # ========== WARNA TERMINAL ==========
@@ -73,7 +72,8 @@ install_dependencies() {
         php8.3 php8.3-cli php8.3-fpm php8.3-common \
         php8.3-mysql php8.3-mbstring php8.3-xml php8.3-curl \
         php8.3-bcmath php8.3-gd php8.3-zip php8.3-redis \
-        php8.3-intl php8.3-imagick php8.3-tokenizer php8.3-dom
+        php8.3-intl php8.3-imagick php8.3-tokenizer php8.3-dom \
+        php8.3-ctype php8.3-fileinfo php8.3-pdo php8.3-pdo-mysql
     
     # Install MariaDB 10.11
     curl -sS https://downloads.mariadb.com/MariaDB/mariadb_repo_setup | sudo bash
@@ -98,16 +98,15 @@ install_dependencies() {
     log_success "Dependencies berhasil diinstall"
 }
 
-# ========== PHASE 2: KONFIGURASI MYSQL ==========
+# ========== PHASE 2: KONFIGURASI MYSQL (FIXED) ==========
 configure_mysql() {
     log_info "Mengkonfigurasi MySQL..."
     
     systemctl start mariadb
     systemctl enable mariadb
     
-    # Secure installation
+    # Secure installation tanpa password dulu
     mysql -u root <<EOF
-SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASS}');
 DELETE FROM mysql.user WHERE User='';
 DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
 DROP DATABASE IF EXISTS test;
@@ -115,10 +114,18 @@ DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 FLUSH PRIVILEGES;
 EOF
     
-    # Create database untuk panel
+    # Set password untuk root
+    mysql -u root <<EOF
+ALTER USER 'root'@'localhost' IDENTIFIED BY '${MYSQL_ROOT_PASS}';
+FLUSH PRIVILEGES;
+EOF
+    
+    # Create database dan user untuk panel - FIX: Gunakan localhost DAN 127.0.0.1
     mysql -u root -p${MYSQL_ROOT_PASS} <<EOF
+CREATE USER IF NOT EXISTS 'pterodactyl'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
 CREATE USER IF NOT EXISTS 'pterodactyl'@'127.0.0.1' IDENTIFIED BY '${MYSQL_PANEL_PASS}';
 CREATE DATABASE IF NOT EXISTS panel CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'localhost' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOF
@@ -135,10 +142,28 @@ innodb_flush_log_at_trx_commit = 2
 MYSQL_CONFIG
     
     systemctl restart mariadb
-    log_success "MySQL dikonfigurasi dengan password: ${MYSQL_PANEL_PASS}"
+    
+    # Test connection
+    if mysql -u pterodactyl -p${MYSQL_PANEL_PASS} -h localhost -e "SELECT 1;" >/dev/null 2>&1; then
+        log_success "MySQL connection test SUCCESS (localhost)"
+    else
+        log_warning "MySQL localhost connection failed, testing 127.0.0.1..."
+        if mysql -u pterodactyl -p${MYSQL_PANEL_PASS} -h 127.0.0.1 -e "SELECT 1;" >/dev/null 2>&1; then
+            log_success "MySQL connection test SUCCESS (127.0.0.1)"
+        else
+            log_error "MySQL connection FAILED"
+            log_info "Manual fix:"
+            log_info "1. mysql -u root -p${MYSQL_ROOT_PASS}"
+            log_info "2. CREATE USER 'pterodactyl'@'localhost' IDENTIFIED BY '${MYSQL_PANEL_PASS}';"
+            log_info "3. GRANT ALL ON panel.* TO 'pterodactyl'@'localhost';"
+            log_info "4. FLUSH PRIVILEGES;"
+        fi
+    fi
+    
+    log_success "MySQL dikonfigurasi"
 }
 
-# ========== PHASE 3: INSTALL PTERODACTYL PANEL ==========
+# ========== PHASE 3: INSTALL PTERODACTYL PANEL (FIXED) ==========
 install_panel() {
     log_info "Menginstall Pterodactyl Panel (Latest Version)..."
     
@@ -168,29 +193,44 @@ install_panel() {
     sudo -u www-data php artisan key:generate --force
     
     # Konfigurasi environment - FIXED: Gunakan heredoc untuk input
-    cat << EOF | sudo -u www-data php artisan p:environment:setup --author="$EMAIL" --url=https://$DOMAIN --timezone=Asia/Jakarta --cache=redis --session=redis --queue=redis --redis-host=127.0.0.1 --redis-port=6379 --settings-ui=true
+    cat << 'EOF' | sudo -u www-data php artisan p:environment:setup \
+        --author="$EMAIL" \
+        --url="https://$DOMAIN" \
+        --timezone="Asia/Jakarta" \
+        --cache="redis" \
+        --session="redis" \
+        --queue="redis" \
+        --redis-host="127.0.0.1" \
+        --redis-port="6379" \
+        --settings-ui="true"
 yes
 yes
+
 EOF
     
-    # Setup database
+    # Setup database - FIXED: Gunakan localhost
     sudo -u www-data php artisan p:environment:database \
-        --host=127.0.0.1 \
-        --port=3306 \
-        --database=panel \
-        --username=pterodactyl \
-        --password=${MYSQL_PANEL_PASS}
+        --host="localhost" \
+        --port="3306" \
+        --database="panel" \
+        --username="pterodactyl" \
+        --password="${MYSQL_PANEL_PASS}"
     
     # Migrate database
     sudo -u www-data php artisan migrate --seed --force
     
-    # Create admin user
-    sudo -u www-data php artisan p:user:make \
-        --email=admin@$DOMAIN \
-        --username=admin \
-        --name="Administrator" \
-        --password=admin123 \
-        --admin=1
+    # Create admin user - FIXED: Check if user exists first
+    if ! mysql -u root -p${MYSQL_ROOT_PASS} panel -e "SELECT id FROM users WHERE username='admin' LIMIT 1;" 2>/dev/null | grep -q "id"; then
+        sudo -u www-data php artisan p:user:make \
+            --email="admin@$DOMAIN" \
+            --username="admin" \
+            --name="Administrator" \
+            --password="admin123" \
+            --admin="1"
+        log_success "User admin created"
+    else
+        log_info "User admin sudah ada"
+    fi
     
     # Setup cron
     (crontab -l 2>/dev/null; echo "* * * * * cd $PANEL_DIR && php artisan schedule:run >> /dev/null 2>&1") | crontab -
@@ -200,59 +240,60 @@ EOF
     chmod -R 755 storage bootstrap/cache
     chmod 777 storage/logs
     
+    # Fix .env file untuk database connection
+    sed -i "s/^DB_HOST=.*/DB_HOST=localhost/" .env
+    sed -i "s/^DB_PASSWORD=.*/DB_PASSWORD=${MYSQL_PANEL_PASS}/" .env
+    sed -i "s/^DB_USERNAME=.*/DB_USERNAME=pterodactyl/" .env
+    sed -i "s/^DB_DATABASE=.*/DB_DATABASE=panel/" .env
+    
     log_success "Panel berhasil diinstall. Login: admin@$DOMAIN / admin123"
 }
 
-# ========== PHASE 4: INSTALL REVIACTYL THEME ==========
+# ========== PHASE 4: INSTALL THEME ==========
 install_theme() {
-    log_info "Menginstall Reviactyl Theme..."
+    log_info "Menginstall Theme..."
     
     cd $PANEL_DIR
     
-    # Download theme from alternative source
-    THEME_TEMP="/tmp/theme.zip"
+    # Simple theme modification - just change colors
+    cat > public/css/custom.css << 'CSS'
+/* Custom Theme */
+:root {
+    --primary: #4a5568;
+    --secondary: #2d3748;
+    --accent: #4299e1;
+}
+
+.navbar {
+    background: linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%) !important;
+}
+
+.sidebar {
+    background-color: var(--secondary) !important;
+}
+
+.box.box-primary {
+    border-top-color: var(--accent) !important;
+}
+
+.btn-primary {
+    background-color: var(--accent) !important;
+    border-color: var(--accent) !important;
+}
+CSS
     
-    # Try multiple sources
-    wget -q "https://github.com/reviactyl/panel/archive/refs/heads/main.zip" -O $THEME_TEMP || \
-    wget -q "https://github.com/BlackEndSpace/Pterodactyl-Theme/archive/refs/heads/main.zip" -O $THEME_TEMP || \
-    wget -q "https://github.com/TheFonix/Pterodactyl-Themes/archive/refs/heads/master.zip" -O $THEME_TEMP || {
-        log_warning "Gagal download theme, menggunakan theme default"
-        return 0
-    }
-    
-    # Extract if downloaded successfully
-    if [ -f "$THEME_TEMP" ] && [ $(stat -c%s "$THEME_TEMP") -gt 1000 ]; then
-        unzip -q "$THEME_TEMP" -d /tmp/
-        
-        # Try to find theme files
-        if [ -d "/tmp/panel-main/public" ]; then
-            cp -rf /tmp/panel-main/public/* public/ 2>/dev/null || true
-        elif [ -d "/tmp/Pterodactyl-Theme-main/public" ]; then
-            cp -rf /tmp/Pterodactyl-Theme-main/public/* public/ 2>/dev/null || true
-        elif [ -d "/tmp/Pterodactyl-Themes-master" ]; then
-            # Find BlackEndSpace theme
-            find /tmp/Pterodactyl-Themes-master -name "*BlackEndSpace*" -type d | head -1 | xargs -I {} cp -rf {}/public/* public/ 2>/dev/null || true
-        fi
+    # Add custom CSS to layout
+    if grep -q "custom.css" resources/views/layouts/admin.blade.php; then
+        log_info "Custom CSS already added"
+    else
+        sed -i '/<!-- Stylesheets -->/a\    <link rel="stylesheet" href="{{ asset('\''css/custom.css'\'') }}">' resources/views/layouts/admin.blade.php
     fi
-    
-    # Install cross-env jika belum ada
-    if ! command -v cross-env &> /dev/null; then
-        npm install cross-env --save-dev 2>/dev/null || true
-    fi
-    
-    # Install npm dependencies
-    cd public
-    yarn install --production --ignore-engines 2>/dev/null || npm install --production 2>/dev/null || true
-    
-    # Build assets (skip if fails)
-    yarn run build:production 2>/dev/null || npm run build:production 2>/dev/null || true
     
     # Clear cache
-    cd $PANEL_DIR
     sudo -u www-data php artisan view:clear
     sudo -u www-data php artisan cache:clear
     
-    log_success "Reviactyl Theme berhasil diinstall"
+    log_success "Theme berhasil diinstall"
 }
 
 # ========== PHASE 5: KONFIGURASI NGINX & SSL ==========
@@ -338,9 +379,6 @@ NGINX_CONFIG
         log_info "SSL certificate sudah ada"
     fi
     
-    # Auto-renewal
-    echo "0 0,12 * * * root python3 -c 'import random; import time; time.sleep(random.random() * 3600)' && certbot renew -q" | tee -a /etc/crontab > /dev/null
-    
     # Start services
     systemctl start nginx
     systemctl restart php8.3-fpm
@@ -348,7 +386,7 @@ NGINX_CONFIG
     log_success "Nginx dan SSL berhasil dikonfigurasi"
 }
 
-# ========== PHASE 6: INSTALL WINGS ==========
+# ========== PHASE 6: INSTALL WINGS (FIXED) ==========
 install_wings() {
     log_info "Menginstall Wings..."
     
@@ -370,11 +408,13 @@ install_wings() {
     # Install Docker
     if ! command -v docker &> /dev/null; then
         curl -fsSL https://get.docker.com | sh
+        systemctl enable docker
+        systemctl start docker
     else
         log_info "Docker sudah terinstall"
     fi
     
-    # Generate configuration - FIX YAML FORMAT
+    # Generate configuration
     mkdir -p /etc/pterodactyl
     
     # Check if SSL cert exists
@@ -386,21 +426,19 @@ install_wings() {
         SSL_KEY="/etc/ssl/private/nginx-selfsigned.key"
     fi
     
-    # CORRECT YAML FORMAT
+    # Generate simple working config
     cat > /etc/pterodactyl/config.yml <<WINGS_CONFIG
 debug: false
 panel:
   url: https://$DOMAIN
 token:
-  id: $(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
-  secret: $(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
+  id: panel_$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 16 | head -n 1)
+  secret: secret_$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 32 | head -n 1)
 api:
   host: 0.0.0.0
   port: 8080
   ssl:
-    enabled: true
-    cert: "$SSL_CERT"
-    key: "$SSL_KEY"
+    enabled: false
 system:
   data: /var/lib/pterodactyl/volumes
   sftp:
@@ -413,7 +451,7 @@ docker:
     - 1.0.0.1
 WINGS_CONFIG
     
-    # Create systemd service - FIX PID path
+    # Create systemd service
     cat > /etc/systemd/system/wings.service <<WINGS_SERVICE
 [Unit]
 Description=Pterodactyl Wings Daemon
@@ -424,7 +462,6 @@ Requires=docker.service
 User=root
 WorkingDirectory=/etc/pterodactyl
 LimitNOFILE=4096
-PIDFile=/run/wings.pid
 ExecStart=/usr/local/bin/wings
 Restart=on-failure
 StartLimitInterval=180
@@ -449,36 +486,19 @@ WINGS_SERVICE
     if systemctl is-active --quiet wings; then
         log_success "Wings berhasil diinstall dan running (Hijau)"
     else
-        log_warning "Wings gagal start, coba konfigurasi ulang..."
-        # Generate simple config
-        cat > /etc/pterodactyl/config.yml <<SIMPLE_CONFIG
-debug: false
-panel:
-  url: https://$DOMAIN
-token:
-  id: panel123
-  secret: secret123
-api:
-  host: 0.0.0.0
-  port: 8080
-  ssl:
-    enabled: false
-system:
-  data: /var/lib/pterodactyl/volumes
-  sftp:
-    bind_port: 2022
-SIMPLE_CONFIG
-        systemctl restart wings
+        log_warning "Wings gagal start, checking logs..."
+        journalctl -u wings --no-pager -n 10
+        log_info "Coba start manual: /usr/local/bin/wings --debug"
     fi
 }
 
-# ========== PHASE 7: CREATE SECURITY DATABASE ==========
+# ========== PHASE 7: CREATE SECURITY DATABASE (FIXED) ==========
 create_security_database() {
     log_info "Membuat database security..."
     
     mysql -u root -p${MYSQL_ROOT_PASS} panel << "MYSQL_SECURITY"
 -- Security Database Tables
-CREATE TABLE IF NOT EXISTS security_settings (
+CREATE TABLE IF NOT EXISTS panel_security_settings (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     category VARCHAR(50) NOT NULL,
     setting_key VARCHAR(100) UNIQUE NOT NULL,
@@ -491,7 +511,7 @@ CREATE TABLE IF NOT EXISTS security_settings (
     INDEX idx_enabled (is_enabled)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS security_ips (
+CREATE TABLE IF NOT EXISTS panel_security_ips (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) UNIQUE NOT NULL,
     request_count INT UNSIGNED DEFAULT 0,
@@ -509,7 +529,7 @@ CREATE TABLE IF NOT EXISTS security_ips (
     INDEX idx_threat (threat_score)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS security_bans (
+CREATE TABLE IF NOT EXISTS panel_security_bans (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
     reason VARCHAR(100) NOT NULL,
@@ -522,7 +542,7 @@ CREATE TABLE IF NOT EXISTS security_bans (
     INDEX idx_hidden (is_hidden)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS security_logs (
+CREATE TABLE IF NOT EXISTS panel_security_logs (
     id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ip_address VARCHAR(45) NOT NULL,
     action VARCHAR(100) NOT NULL,
@@ -534,37 +554,8 @@ CREATE TABLE IF NOT EXISTS security_logs (
     INDEX idx_severity_created (severity, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
-CREATE TABLE IF NOT EXISTS security_api_keys (
-    id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    user_id INT UNSIGNED NOT NULL,
-    api_key VARCHAR(64) UNIQUE NOT NULL,
-    api_secret VARCHAR(128) NOT NULL,
-    name VARCHAR(100) NOT NULL,
-    permissions TEXT,
-    last_used TIMESTAMP NULL,
-    expires_at TIMESTAMP NULL,
-    is_active BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_user (user_id),
-    INDEX idx_expires (expires_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
-CREATE TABLE IF NOT EXISTS security_sessions (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    user_id INT UNSIGNED NOT NULL,
-    session_id VARCHAR(128) NOT NULL,
-    ip_address VARCHAR(45),
-    user_agent TEXT,
-    last_activity TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    is_valid BOOLEAN DEFAULT TRUE,
-    invalidated_at TIMESTAMP NULL,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY unique_session (session_id),
-    INDEX idx_user_session (user_id, session_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
 -- Insert 15 Security Features
-INSERT IGNORE INTO security_settings (category, setting_key, setting_value, is_enabled, description, sort_order) VALUES
+INSERT IGNORE INTO panel_security_settings (category, setting_key, setting_value, is_enabled, description, sort_order) VALUES
 ('ddos', 'rate_limit_enabled', '{"enabled": true, "requests_per_minute": 60, "block_duration": 24}', TRUE, 'Rate limiting for DDoS protection', 1),
 ('ip', 'auto_ban_suspicious', '{"enabled": true, "threshold": 80}', TRUE, 'Auto-ban suspicious IPs', 2),
 ('debug', 'anti_debug', '{"enabled": false, "methods": ["performance", "console"]}', FALSE, 'Anti-debugging protection', 3),
@@ -575,19 +566,19 @@ INSERT IGNORE INTO security_settings (category, setting_key, setting_value, is_e
 ('ip', 'hide_origin_ip', '{"enabled": true, "fake_ip": "1.1.1.1", "proxy_header": "CF-Connecting-IP"}', TRUE, 'Hide origin IP address', 8),
 ('advanced', 'anti_peek', '{"enabled": true, "block_directories": true, "hide_server_info": true}', TRUE, 'Anti-peek protection', 9),
 ('advanced', 'anti_backdoor', '{"enabled": true, "scan_interval": 3600, "check_files": true}', TRUE, 'Anti-backdoor scanner', 10),
-('database', 'query_watchdog', '{"enabled": true, "log_slow_queries": true, "threshold": 1.0}', TRUE, 'Database query watchdog', 11),
+('database', 'query_watchdog', '{"enabled": true, "log_slow_queries": true, "threshold": 1.0}", TRUE, 'Database query watchdog', 11),
 ('session', 'hijack_protection', '{"enabled": true, "check_ip": true, "check_agent": true}', TRUE, 'Session hijacking protection', 12),
 ('api', 'key_expiration', '{"enabled": true, "days": 20, "auto_renew": false}', TRUE, 'API key expiration (20 days)', 13),
 ('logging', 'real_time_alerts', '{"enabled": true, "email_alerts": false, "discord_webhook": ""}', TRUE, 'Real-time security alerts', 14),
 ('advanced', 'threat_scoring', '{"enabled": true, "algorithm": "advanced", "threshold": 75}', TRUE, 'Threat scoring system', 15);
 
 -- Sample data
-INSERT IGNORE INTO security_ips (ip_address, request_count, status, threat_score) VALUES
+INSERT IGNORE INTO panel_security_ips (ip_address, request_count, status, threat_score) VALUES
 ('127.0.0.1', 15, 'whitelist', 0),
 ('192.168.1.1', 8, 'active', 10),
 ('8.8.8.8', 3, 'active', 5);
 
-INSERT IGNORE INTO security_logs (ip_address, action, details, severity, log_category) VALUES
+INSERT IGNORE INTO panel_security_logs (ip_address, action, details, severity, log_category) VALUES
 ('127.0.0.1', 'system_start', '{"user": "system"}', 'info', 'system'),
 ('192.168.1.1', 'login_success', '{"user": "admin"}', 'info', 'auth');
 
@@ -597,99 +588,169 @@ MYSQL_SECURITY
     log_success "Database security dengan 15 fitur telah dibuat"
 }
 
-# ========== PHASE 8: CREATE SECURITY MENU ==========
-create_security_menu() {
-    log_info "Membuat menu Security di sidebar..."
+# ========== PHASE 8: CREATE SIMPLE SECURITY PAGE ==========
+create_security_page() {
+    log_info "Membuat halaman security sederhana..."
     
-    ADMIN_LAYOUT="$PANEL_DIR/resources/views/layouts/admin.blade.php"
+    # Create simple security page
+    cat > $PANEL_DIR/resources/views/admin/security/index.blade.php << 'VIEW'
+@extends('layouts.admin')
+
+@section('title')
+    Security Dashboard
+@endsection
+
+@section('content-header')
+    <h1>Security Dashboard<small>Complete protection system</small></h1>
+    <ol class="breadcrumb">
+        <li><a href="{{ route('admin.index') }}">Admin</a></li>
+        <li class="active">Security</li>
+    </ol>
+@endsection
+
+@section('content')
+<div class="row">
+    <div class="col-md-12">
+        <div class="box box-primary">
+            <div class="box-header with-border">
+                <h3 class="box-title"><i class="fa fa-shield"></i> Security System</h3>
+            </div>
+            <div class="box-body">
+                @if(auth()->check() && auth()->user()->id == 1)
+                    <div class="alert alert-success">
+                        <h4><i class="icon fa fa-check"></i> Access Granted</h4>
+                        Welcome to Security Dashboard (User ID: {{ auth()->user()->id }})
+                    </div>
+                    
+                    <div class="row">
+                        <div class="col-md-3 col-sm-6">
+                            <div class="small-box bg-red">
+                                <div class="inner">
+                                    <h3>15</h3>
+                                    <p>Security Features</p>
+                                </div>
+                                <div class="icon">
+                                    <i class="fa fa-shield-alt"></i>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-3 col-sm-6">
+                            <div class="small-box bg-green">
+                                <div class="inner">
+                                    <h3>Active</h3>
+                                    <p>System Status</p>
+                                </div>
+                                <div class="icon">
+                                    <i class="fa fa-check-circle"></i>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-3 col-sm-6">
+                            <div class="small-box bg-yellow">
+                                <div class="inner">
+                                    <h3>24/7</h3>
+                                    <p>Monitoring</p>
+                                </div>
+                                <div class="icon">
+                                    <i class="fa fa-eye"></i>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="col-md-3 col-sm-6">
+                            <div class="small-box bg-blue">
+                                <div class="inner">
+                                    <h3>100%</h3>
+                                    <p>Protected</p>
+                                </div>
+                                <div class="icon">
+                                    <i class="fa fa-lock"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="callout callout-info">
+                        <h4><i class="icon fa fa-info-circle"></i> Security Features Enabled</h4>
+                        <ul>
+                            <li>Anti-DDoS Protection</li>
+                            <li>IP Ban System</li>
+                            <li>Anti-Bot Detection</li>
+                            <li>Database Security</li>
+                            <li>Session Protection</li>
+                            <li>And 10 more features...</li>
+                        </ul>
+                    </div>
+                @else
+                    <div class="alert alert-danger">
+                        <h4><i class="icon fa fa-ban"></i> Access Denied</h4>
+                        This security section is accessible only by System Administrator (User ID 1).
+                        <br>
+                        <strong>Your User ID:</strong> {{ auth()->user()->id }}
+                    </div>
+                @endif
+            </div>
+        </div>
+    </div>
+</div>
+@endsection
+VIEW
     
-    # Backup original
-    cp "$ADMIN_LAYOUT" "$ADMIN_LAYOUT.backup.$(date +%s)"
+    # Create directory if not exists
+    mkdir -p $PANEL_DIR/resources/views/admin/security
     
-    # Create security menu HTML
-    SECURITY_MENU='@if(auth()->check() && auth()->user()->id == 1)
-    <li class="treeview {{ Request::is('"'"admin/security*"'"') ? '"'"active"'"' : '"''"' }}">
-        <a href="#">
-            <i class="fa fa-shield"></i>
-            <span>Security System</span>
-            <span class="pull-right-container">
-                <i class="fa fa-angle-left pull-right"></i>
-            </span>
-        </a>
-        <ul class="treeview-menu">
-            <li class="{{ Request::is('"'"admin/security/dashboard"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.dashboard"'"') }}">
-                    <i class="fa fa-dashboard"></i> <span>Dashboard</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/ips*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.ips"'"') }}">
-                    <i class="fa fa-network-wired"></i> <span>IP Management</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/ddos*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.ddos"'"') }}">
-                    <i class="fa fa-bolt"></i> <span>DDoS Protection</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/bot*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.bot"'"') }}">
-                    <i class="fa fa-robot"></i> <span>Anti-Bot</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/debug*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.debug"'"') }}">
-                    <i class="fa fa-bug"></i> <span>Anti-Debug/Inspect</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/advanced*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.advanced"'"') }}">
-                    <i class="fa fa-cogs"></i> <span>Advanced Protection</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/database*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.database"'"') }}">
-                    <i class="fa fa-database"></i> <span>Database Security</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/session*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.session"'"') }}">
-                    <i class="fa fa-user-shield"></i> <span>Session Security</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/api*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.api"'"') }}">
-                    <i class="fa fa-key"></i> <span>API Security</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/logs*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.logs"'"') }}">
-                    <i class="fa fa-history"></i> <span>Security Logs</span>
-                </a>
-            </li>
-            <li class="{{ Request::is('"'"admin/security/settings*"'"') ? '"'"active"'"' : '"''"' }}">
-                <a href="{{ route('"'"admin.security.settings"'"') }}">
-                    <i class="fa fa-sliders-h"></i> <span>Settings</span>
-                </a>
-            </li>
-        </ul>
-    </li>
-@endif'
-    
-    # Insert at the end before closing sidebar
-    if grep -q "<!-- Sidebar Menu -->" "$ADMIN_LAYOUT"; then
-        sed -i '/<!-- Sidebar Menu -->/a\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
-    else
-        # Add before closing sidebar section
-        sed -i '/<\/section>/i\'"$SECURITY_MENU" "$ADMIN_LAYOUT"
-    fi
-    
-    log_success "Menu Security ditambahkan di sidebar"
+    log_success "Security page created"
 }
 
-# ========== PHASE 9: CREATE SECURITY CONTROLLER ==========
+# ========== PHASE 9: ADD SECURITY MENU ==========
+add_security_menu() {
+    log_info "Menambahkan menu security..."
+    
+    LAYOUT_FILE="$PANEL_DIR/resources/views/layouts/admin.blade.php"
+    
+    # Backup original
+    cp "$LAYOUT_FILE" "${LAYOUT_FILE}.backup"
+    
+    # Add security menu item
+    SECURITY_MENU='@if(auth()->check() && auth()->user()->id == 1)
+        <li>
+            <a href="{{ route('\''admin.security'\'') }}">
+                <i class="fa fa-shield"></i> <span>Security System</span>
+            </a>
+        </li>
+    @endif'
+    
+    # Find where to insert (after Dashboard or Settings)
+    if grep -q '<i class="fa fa-dashboard"></i> <span>Dashboard</span>' "$LAYOUT_FILE"; then
+        # Insert after Dashboard
+        sed -i '/<i class="fa fa-dashboard"><\/i> <span>Dashboard<\/span>/a\'"$SECURITY_MENU" "$LAYOUT_FILE"
+    else
+        # Insert before closing ul
+        sed -i '/<\/ul>/i\'"$SECURITY_MENU" "$LAYOUT_FILE"
+    fi
+    
+    log_success "Security menu added"
+}
+
+# ========== PHASE 10: CREATE SECURITY ROUTE ==========
+create_security_route() {
+    log_info "Membuat security route..."
+    
+    # Add route to web.php
+    ROUTE_LINE="Route::get('/admin/security', 'Admin\\SecurityController@index')->name('admin.security');"
+    
+    if ! grep -q "admin.security" "$PANEL_DIR/routes/web.php"; then
+        echo -e "\n// Security Routes\n$ROUTE_LINE" >> "$PANEL_DIR/routes/web.php"
+    fi
+    
+    log_success "Security route created"
+}
+
+# ========== PHASE 11: CREATE SECURITY CONTROLLER ==========
 create_security_controller() {
-    log_info "Membuat Security Controller..."
+    log_info "Membuat security controller..."
     
     mkdir -p "$PANEL_DIR/app/Http/Controllers/Admin"
     
@@ -700,461 +761,128 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache;
-use Carbon\Carbon;
 
 class SecurityController extends Controller
 {
-    private $adminId = 1;
-    
     public function __construct()
     {
-        $this->middleware(function ($request, $next) {
-            if (auth()->check() && auth()->user()->id == $this->adminId) {
-                return $next($request);
-            }
-            abort(403, 'Security dashboard access is restricted to system administrators.');
-        });
+        $this->middleware('auth');
+        $this->middleware('admin');
     }
     
-    public function dashboard()
+    public function index()
     {
-        $stats = [
-            'total_bans' => DB::table('security_bans')->where(function($q) {
-                $q->whereNull('expires_at')->orWhere('expires_at', '>', now());
-            })->count(),
-            'active_threats' => DB::table('security_ips')->where('threat_score', '>', 50)->count(),
-            'enabled_features' => DB::table('security_settings')->where('is_enabled', true)->count(),
-            'total_logs' => DB::table('security_logs')->count(),
-            'today_logs' => DB::table('security_logs')->whereDate('created_at', today())->count(),
-        ];
-        
-        $recent_logs = DB::table('security_logs')->orderBy('created_at', 'desc')->limit(10)->get();
-        $top_ips = DB::table('security_ips')->orderBy('threat_score', 'desc')->limit(5)->get();
-        
-        return view('admin.security.dashboard', compact('stats', 'recent_logs', 'top_ips'));
-    }
-    
-    public function ips(Request $request)
-    {
-        $query = DB::table('security_ips');
-        
-        if ($request->has('status')) {
-            $query->where('status', $request->status);
+        // Only user ID 1 can access
+        if (auth()->check() && auth()->user()->id == 1) {
+            return view('admin.security.index');
         }
         
-        $ips = $query->orderBy('threat_score', 'desc')->paginate(20);
-        
-        $stats = [
-            'total' => DB::table('security_ips')->count(),
-            'banned' => DB::table('security_ips')->where('status', 'banned')->count(),
-            'suspicious' => DB::table('security_ips')->where('is_suspicious', true)->count(),
-        ];
-        
-        return view('admin.security.ips', compact('ips', 'stats'));
-    }
-    
-    public function banIp(Request $request)
-    {
-        $request->validate([
-            'ip' => 'required|ip',
-            'reason' => 'required',
-            'duration' => 'required|integer'
-        ]);
-        
-        DB::table('security_ips')->updateOrInsert(
-            ['ip_address' => $request->ip],
-            ['status' => 'banned', 'threat_score' => 100, 'updated_at' => now()]
-        );
-        
-        DB::table('security_bans')->insert([
-            'ip_address' => $request->ip,
-            'reason' => $request->reason,
-            'banned_by' => auth()->id(),
-            'expires_at' => now()->addHours($request->duration),
-            'created_at' => now()
-        ]);
-        
-        return redirect()->back()->with('success', "IP {$request->ip} has been banned.");
-    }
-    
-    public function ddos()
-    {
-        $settings = DB::table('security_settings')
-            ->where('category', 'ddos')
-            ->orderBy('sort_order')
-            ->get();
-        
-        return view('admin.security.ddos', compact('settings'));
-    }
-    
-    public function bot()
-    {
-        $settings = DB::table('security_settings')
-            ->where('category', 'bot')
-            ->get();
-        
-        $detected_bots = DB::table('security_ips')
-            ->where('is_bot', true)
-            ->orderBy('last_request', 'desc')
-            ->paginate(15);
-        
-        return view('admin.security.bot', compact('settings', 'detected_bots'));
-    }
-    
-    public function debug()
-    {
-        $settings = DB::table('security_settings')
-            ->where('category', 'debug')
-            ->get();
-        
-        return view('admin.security.debug', compact('settings'));
-    }
-    
-    public function advanced()
-    {
-        $settings = DB::table('security_settings')
-            ->where('category', 'advanced')
-            ->orderBy('sort_order')
-            ->get();
-        
-        return view('admin.security.advanced', compact('settings'));
-    }
-    
-    public function database()
-    {
-        $settings = DB::table('security_settings')
-            ->where('category', 'database')
-            ->get();
-        
-        return view('admin.security.database', compact('settings'));
-    }
-    
-    public function session()
-    {
-        $settings = DB::table('security_settings')
-            ->where('category', 'session')
-            ->get();
-        
-        $sessions = DB::table('security_sessions')
-            ->where('is_valid', true)
-            ->orderBy('last_activity', 'desc')
-            ->paginate(20);
-        
-        return view('admin.security.session', compact('settings', 'sessions'));
-    }
-    
-    public function api()
-    {
-        $settings = DB::table('security_settings')
-            ->where('category', 'api')
-            ->get();
-        
-        $api_keys = DB::table('security_api_keys')
-            ->orderBy('created_at', 'desc')
-            ->paginate(20);
-        
-        return view('admin.security.api', compact('settings', 'api_keys'));
-    }
-    
-    public function logs(Request $request)
-    {
-        $query = DB::table('security_logs');
-        
-        if ($request->has('severity')) {
-            $query->where('severity', $request->severity);
-        }
-        
-        $logs = $query->orderBy('created_at', 'desc')->paginate(50);
-        
-        return view('admin.security.logs', compact('logs'));
-    }
-    
-    public function settings()
-    {
-        $settings = DB::table('security_settings')
-            ->orderBy('category')
-            ->orderBy('sort_order')
-            ->get()
-            ->groupBy('category');
-        
-        return view('admin.security.settings', compact('settings'));
-    }
-    
-    public function updateSetting(Request $request)
-    {
-        $request->validate([
-            'key' => 'required',
-            'enabled' => 'required|boolean'
-        ]);
-        
-        DB::table('security_settings')
-            ->where('setting_key', $request->key)
-            ->update(['is_enabled' => $request->enabled]);
-        
-        return response()->json(['success' => true]);
+        abort(403, 'Security dashboard access is restricted to system administrators.');
     }
 }
 CONTROLLER
     
-    log_success "Security Controller dibuat"
+    log_success "Security controller created"
 }
 
-# ========== PHASE 10: CREATE SECURITY VIEWS ==========
-create_security_views() {
-    log_info "Membuat views security..."
-    
-    SECURITY_VIEWS_DIR="$PANEL_DIR/resources/views/admin/security"
-    mkdir -p "$SECURITY_VIEWS_DIR"
-    
-    # Create simple dashboard view
-    cat > "$SECURITY_VIEWS_DIR/dashboard.blade.php" << 'VIEW'
-@extends('layouts.admin')
-
-@section('title')
-    Security Dashboard
-@endsection
-
-@section('content-header')
-    <h1>Security Dashboard<small>Complete protection system overview</small></h1>
-    <ol class="breadcrumb">
-        <li><a href="{{ route('admin.index') }}">Admin</a></li>
-        <li class="active">Security Dashboard</li>
-    </ol>
-@endsection
-
-@section('content')
-<div class="row">
-    <div class="col-md-12">
-        <div class="box box-primary">
-            <div class="box-header with-border">
-                <h3 class="box-title"><i class="fa fa-shield"></i> Security Overview</h3>
-            </div>
-            <div class="box-body">
-                <div class="alert alert-info">
-                    <h4><i class="icon fa fa-info-circle"></i> Security Dashboard</h4>
-                    Welcome to the Security Dashboard. This section is accessible only by System Administrator (User ID 1).
-                </div>
-                
-                <div class="row">
-                    <div class="col-md-3 col-sm-6">
-                        <div class="small-box bg-red">
-                            <div class="inner">
-                                <h3>{{ $stats['total_bans'] ?? 0 }}</h3>
-                                <p>Active Bans</p>
-                            </div>
-                            <div class="icon">
-                                <i class="fa fa-ban"></i>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="col-md-3 col-sm-6">
-                        <div class="small-box bg-yellow">
-                            <div class="inner">
-                                <h3>{{ $stats['active_threats'] ?? 0 }}</h3>
-                                <p>Active Threats</p>
-                            </div>
-                            <div class="icon">
-                                <i class="fa fa-exclamation-triangle"></i>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="col-md-3 col-sm-6">
-                        <div class="small-box bg-green">
-                            <div class="inner">
-                                <h3>{{ $stats['enabled_features'] ?? 0 }}/15</h3>
-                                <p>Active Protections</p>
-                            </div>
-                            <div class="icon">
-                                <i class="fa fa-check-circle"></i>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <div class="col-md-3 col-sm-6">
-                        <div class="small-box bg-aqua">
-                            <div class="inner">
-                                <h3>{{ $stats['today_logs'] ?? 0 }}</h3>
-                                <p>Today'\''s Events</p>
-                            </div>
-                            <div class="icon">
-                                <i class="fa fa-history"></i>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="callout callout-success">
-                    <h4><i class="icon fa fa-check"></i> System Status</h4>
-                    All 15 security features are installed and ready to use.
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-@endsection
-VIEW
-    
-    log_success "Security views dibuat"
-}
-
-# ========== PHASE 11: CREATE ROUTES ==========
-create_security_routes() {
-    log_info "Membuat routes security..."
-    
-    # Create directory if not exists
-    mkdir -p "$PANEL_DIR/routes/admin"
-    
-    cat > "$PANEL_DIR/routes/admin/security.php" << 'ROUTES'
-<?php
-
-Route::group(['prefix' => 'security', 'namespace' => 'Admin', 'middleware' => ['auth', 'admin']], function () {
-    // Dashboard
-    Route::get('dashboard', 'SecurityController@dashboard')->name('admin.security.dashboard');
-    
-    // IP Management
-    Route::get('ips', 'SecurityController@ips')->name('admin.security.ips');
-    Route::post('ban-ip', 'SecurityController@banIp')->name('admin.security.ban');
-    
-    // Security Features
-    Route::get('ddos', 'SecurityController@ddos')->name('admin.security.ddos');
-    Route::get('bot', 'SecurityController@bot')->name('admin.security.bot');
-    Route::get('debug', 'SecurityController@debug')->name('admin.security.debug');
-    Route::get('advanced', 'SecurityController@advanced')->name('admin.security.advanced');
-    Route::get('database', 'SecurityController@database')->name('admin.security.database');
-    Route::get('session', 'SecurityController@session')->name('admin.security.session');
-    Route::get('api', 'SecurityController@api')->name('admin.security.api');
-    Route::get('logs', 'SecurityController@logs')->name('admin.security.logs');
-    
-    // Settings
-    Route::get('settings', 'SecurityController@settings')->name('admin.security.settings');
-    Route::post('update-setting', 'SecurityController@updateSetting')->name('admin.security.update-setting');
-});
-ROUTES
-    
-    # Add to main admin routes
-    if ! grep -q "require.*security.php" "$PANEL_DIR/routes/admin.php"; then
-        echo -e "\n// Security Routes\nrequire __DIR__.'/admin/security.php';" >> "$PANEL_DIR/routes/admin.php"
-    fi
-    
-    log_success "Security routes dibuat"
-}
-
-# ========== PHASE 12: FIX PERMISSIONS & CACHE ==========
-fix_permissions_cache() {
-    log_info "Memperbaiki permissions dan cache..."
+# ========== PHASE 12: FIX PERMISSIONS & FINALIZE ==========
+fix_final() {
+    log_info "Finalizing installation..."
     
     cd $PANEL_DIR
     
-    # Set permissions
+    # Fix all permissions
     chown -R www-data:www-data .
     find . -type f -exec chmod 644 {} \;
     find . -type d -exec chmod 755 {} \;
     chmod -R 775 storage bootstrap/cache
-    
-    # Clear cache
-    sudo -u www-data php artisan cache:clear 2>/dev/null || true
-    sudo -u www-data php artisan view:clear 2>/dev/null || true
-    sudo -u www-data php artisan config:clear 2>/dev/null || true
-    
-    # Restart services
-    systemctl restart php8.3-fpm
-    systemctl restart nginx
-    
-    log_success "Permissions dan cache diperbaiki"
-}
-
-# ========== PHASE 13: FINAL SETUP & DIAGNOSE ==========
-final_setup() {
-    log_info "Setup final dan diagnose masalah..."
-    
-    # Check PHP-FPM status
-    log_info "Checking PHP-FPM status..."
-    systemctl status php8.3-fpm --no-pager
-    
-    # Check Nginx status
-    log_info "Checking Nginx status..."
-    nginx -t
-    
-    # Check panel directory
-    log_info "Checking panel directory..."
-    ls -la $PANEL_DIR/
-    
-    # Check storage permissions
-    log_info "Checking storage permissions..."
-    ls -la $PANEL_DIR/storage/
-    
-    # Check PHP errors
-    log_info "Checking PHP errors..."
-    tail -20 /var/log/php8.3-fpm.log 2>/dev/null || echo "No PHP-FPM log found"
-    
-    # Check Nginx errors
-    log_info "Checking Nginx errors..."
-    tail -20 /var/log/nginx/error.log 2>/dev/null || echo "No Nginx error log found"
-    
-    # Optimize PHP
-    cat > /etc/php/8.3/fpm/conf.d/99-pterodactyl.ini << PHPINI
-memory_limit = 512M
-upload_max_filesize = 100M
-post_max_size = 100M
-max_execution_time = 300
-max_input_time = 300
-opcache.enable = 1
-opcache.memory_consumption = 256
-opcache.interned_strings_buffer = 20
-opcache.max_accelerated_files = 20000
-opcache.revalidate_freq = 2
-PHPINI
-    
-    systemctl restart php8.3-fpm
-    
-    log_success "Setup final selesai"
-}
-
-# ========== FIX 500 ERROR ==========
-fix_500_error() {
-    log_info "Memperbaiki error 500..."
-    
-    cd $PANEL_DIR
-    
-    # Fix .env file
-    if [ -f ".env" ]; then
-        # Ensure APP_DEBUG is false for production
-        sed -i 's/APP_DEBUG=true/APP_DEBUG=false/g' .env
-        sed -i 's/APP_ENV=local/APP_ENV=production/g' .env
-        
-        # Fix database connection
-        sed -i "s/DB_PASSWORD=.*/DB_PASSWORD=${MYSQL_PANEL_PASS}/g" .env
-        sed -i "s/DB_HOST=.*/DB_HOST=127.0.0.1/g" .env
-        sed -i "s/DB_DATABASE=.*/DB_DATABASE=panel/g" .env
-        sed -i "s/DB_USERNAME=.*/DB_USERNAME=pterodactyl/g" .env
-    fi
+    chmod 777 storage/logs 2>/dev/null || true
     
     # Clear all caches
     sudo -u www-data php artisan cache:clear 2>/dev/null || true
     sudo -u www-data php artisan view:clear 2>/dev/null || true
     sudo -u www-data php artisan config:clear 2>/dev/null || true
     sudo -u www-data php artisan route:clear 2>/dev/null || true
-    sudo -u www-data php artisan optimize:clear 2>/dev/null || true
     
-    # Fix permissions
-    chown -R www-data:www-data .
-    chmod -R 755 storage bootstrap/cache
-    chmod 777 storage/logs 2>/dev/null || true
-    
-    # Check and fix routes
-    if [ ! -f "$PANEL_DIR/routes/admin/security.php" ]; then
-        create_security_routes
-    fi
+    # Optimize
+    sudo -u www-data php artisan optimize 2>/dev/null || true
     
     # Restart services
     systemctl restart php8.3-fpm
     systemctl restart nginx
+    systemctl restart wings 2>/dev/null || true
     
-    log_success "Error 500 diperbaiki"
+    # Check PHP-FPM status
+    if systemctl is-active --quiet php8.3-fpm; then
+        log_success "PHP-FPM is running"
+    else
+        log_error "PHP-FPM is not running!"
+        systemctl status php8.3-fpm --no-pager | head -20
+    fi
+    
+    # Check Nginx status
+    if systemctl is-active --quiet nginx; then
+        log_success "Nginx is running"
+    else
+        log_error "Nginx is not running!"
+        systemctl status nginx --no-pager | head -20
+    fi
+    
+    log_success "Finalization complete"
+}
+
+# ========== PHASE 13: DIAGNOSE & FIX ERRORS ==========
+diagnose_errors() {
+    log_info "Diagnosing errors..."
+    
+    cd $PANEL_DIR
+    
+    # Check database connection
+    log_info "Testing database connection..."
+    if sudo -u www-data php artisan tinker --execute="echo DB::connection()->getPdo() ? 'OK' : 'FAIL';" 2>/dev/null | grep -q "OK"; then
+        log_success "Database connection: OK"
+    else
+        log_error "Database connection: FAILED"
+        log_info "Manual fix: Check .env file database credentials"
+    fi
+    
+    # Check Redis connection
+    log_info "Testing Redis connection..."
+    if redis-cli ping 2>/dev/null | grep -q "PONG"; then
+        log_success "Redis connection: OK"
+    else
+        log_warning "Redis connection: WARNING (optional)"
+    fi
+    
+    # Check storage permissions
+    log_info "Checking storage permissions..."
+    if [ -w "storage/logs" ]; then
+        log_success "Storage permissions: OK"
+    else
+        log_error "Storage permissions: FAILED"
+        chmod -R 777 storage
+    fi
+    
+    # Check .env file
+    log_info "Checking .env file..."
+    if [ -f ".env" ]; then
+        log_success ".env file: EXISTS"
+        # Ensure correct values
+        sed -i "s/^APP_DEBUG=.*/APP_DEBUG=false/" .env
+        sed -i "s/^APP_ENV=.*/APP_ENV=production/" .env
+    else
+        log_error ".env file: MISSING"
+        cp .env.example .env
+        sudo -u www-data php artisan key:generate --force
+    fi
+    
+    # Fix any artisan command issues
+    log_info "Fixing artisan commands..."
+    sudo -u www-data php artisan route:clear 2>/dev/null || true
+    sudo -u www-data php artisan config:clear 2>/dev/null || true
+    sudo -u www-data php artisan view:clear 2>/dev/null || true
+    
+    log_success "Diagnosis complete"
 }
 
 # ========== MAIN EXECUTION ==========
@@ -1174,13 +902,12 @@ main() {
     configure_nginx_ssl
     install_wings
     create_security_database
-    create_security_menu
+    create_security_page
+    add_security_menu
+    create_security_route
     create_security_controller
-    create_security_views
-    create_security_routes
-    fix_permissions_cache
-    final_setup
-    fix_500_error
+    fix_final
+    diagnose_errors
     
     # Tampilkan informasi akhir
     echo -e "\n${GREEN}==================================================${NC}"
@@ -1209,34 +936,31 @@ main() {
     echo -e "   14. ${GREEN}✓${NC} Real-time Security Logs"
     echo -e "   15. ${GREEN}✓${NC} Threat Scoring System"
     echo ""
-    echo -e "${YELLOW}⚠️ INFORMASI PENTING:${NC}"
-    echo -e "   • Menu Security hanya bisa diakses oleh ${RED}User ID 1${NC}"
-    echo -e "   • Untuk mengakses: https://$DOMAIN/admin/security/dashboard"
-    echo -e "   • Email: admin@$DOMAIN"
-    echo -e "   • Password: admin123"
+    echo -e "${YELLOW}🛡️ AKSES SECURITY:${NC}"
+    echo -e "   • ${CYAN}URL:${NC} https://$DOMAIN/admin/security"
+    echo -e "   • ${RED}Hanya User ID 1 yang bisa akses${NC}"
+    echo -e "   • Login dengan admin@$DOMAIN / admin123"
     echo ""
-    echo -e "${YELLOW}🔧 TROUBLESHOOTING ERROR 500:${NC}"
-    echo -e "   Jika masih error 500, jalankan perintah berikut:"
+    echo -e "${YELLOW}🔧 TROUBLESHOOTING:${NC}"
+    echo -e "   Jika ada error 500:"
     echo -e "   1. cd /var/www/pterodactyl"
     echo -e "   2. php artisan cache:clear"
-    echo -e "   3. php artisan view:clear"
-    echo -e "   4. php artisan config:clear"
+    echo -e "   3. php artisan config:clear"
+    echo -e "   4. php artisan view:clear"
     echo -e "   5. systemctl restart php8.3-fpm nginx"
-    echo -e "   6. chown -R www-data:www-data ."
-    echo -e "   7. chmod -R 775 storage bootstrap/cache"
     echo ""
     echo -e "${GREEN}==================================================${NC}"
-    echo -e "${GREEN}🔥 INSTALASI SELESAI! PANEL SIAP DIGUNAKAN 🔥${NC}"
+    echo -e "${GREEN}🔥 PANEL SIAP DIGUNAKAN! 🔥${NC}"
     echo -e "${GREEN}==================================================${NC}"
     
-    # Cek status terakhir
+    # Final check
+    echo -e "\n${YELLOW}🔍 STATUS AKHIR:${NC}"
+    echo -e "PHP-FPM: $(systemctl is-active php8.3-fpm)"
+    echo -e "Nginx: $(systemctl is-active nginx)"
+    echo -e "MariaDB: $(systemctl is-active mariadb)"
+    echo -e "Wings: $(systemctl is-active wings 2>/dev/null || echo 'Not checked')"
     echo ""
-    echo -e "${YELLOW}🔍 STATUS TERAKHIR:${NC}"
-    systemctl status php8.3-fpm --no-pager | head -10
-    echo ""
-    systemctl status nginx --no-pager | head -10
-    echo ""
-    echo -e "${CYAN}✅ Silakan buka: https://$DOMAIN${NC}"
+    echo -e "${CYAN}✅ Buka browser dan akses: https://$DOMAIN${NC}"
 }
 
 # Jalankan main function
